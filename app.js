@@ -56,6 +56,9 @@ let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
 
+const TREND_MONTHS = 6;
+let trendExpenses = [];
+
 // ---------- helpers ----------
 
 function pad(n) { return String(n).padStart(2, '0'); }
@@ -64,7 +67,7 @@ function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
 function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
 function fmtMoney(n) {
   const v = Number(n) || 0;
-  return (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 function hexToRgba(hex, alpha) {
   const h = (hex || '#2a78d6').replace('#', '');
@@ -110,6 +113,23 @@ async function loadMonthData() {
 
   expenses = expRes.data || [];
   budgets = budRes.data || [];
+}
+
+async function loadTrendData() {
+  const rangeStartISO = fmtDateISO(addMonths(currentMonth, -(TREND_MONTHS - 1)));
+  const rangeEndISO = fmtDateISO(addMonths(currentMonth, 1));
+
+  const { data, error } = await sb.from('expenses')
+    .select('profile_id, amount, expense_date')
+    .gte('expense_date', rangeStartISO)
+    .lt('expense_date', rangeEndISO);
+
+  if (error) { toast('Error loading trend: ' + error.message); throw error; }
+  trendExpenses = data || [];
+}
+
+async function loadAllData() {
+  await Promise.all([loadMonthData(), loadTrendData()]);
 }
 
 function computeProfileStats(profileId) {
@@ -216,6 +236,7 @@ function renderProfiles() {
       renderTabs();
       renderTransactions();
       renderCategoryChart();
+      renderTrendChart();
       renderProfiles();
     });
 
@@ -341,6 +362,51 @@ function renderCategoryChart() {
   }
 }
 
+function monthKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
+
+function renderTrendChart() {
+  const heading = document.getElementById('trendHeading');
+  const container = document.getElementById('trendChart');
+
+  const profileLabel = activeProfileFilter === 'all' ? 'All profiles' : (profiles.find(p => p.id === activeProfileFilter)?.name || 'Profile');
+  heading.textContent = `${profileLabel} — last ${TREND_MONTHS} months`;
+
+  const months = [];
+  for (let i = TREND_MONTHS - 1; i >= 0; i--) months.push(addMonths(currentMonth, -i));
+
+  const scoped = activeProfileFilter === 'all' ? trendExpenses : trendExpenses.filter(e => e.profile_id === activeProfileFilter);
+
+  const totals = months.map(m => {
+    const key = monthKey(m);
+    const total = scoped
+      .filter(e => monthKey(new Date(e.expense_date + 'T00:00:00')) === key)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    return { month: m, total };
+  });
+
+  if (totals.every(t => t.total === 0)) {
+    container.innerHTML = '<div class="empty-note">No expense history yet.</div>';
+    return;
+  }
+
+  const max = Math.max(...totals.map(t => t.total), 1);
+
+  let html = '<div class="trend-bars">';
+  totals.forEach(t => {
+    const pct = Math.max((t.total / max) * 100, t.total > 0 ? 4 : 0);
+    const isCurrent = t.month.getTime() === currentMonth.getTime();
+    const label = t.month.toLocaleString(undefined, { month: 'short' });
+    html += `
+      <div class="trend-col${isCurrent ? ' current' : ''}">
+        <span class="trend-value">${t.total > 0 ? fmtMoney(t.total) : ''}</span>
+        <div class="trend-bar-track"><div class="trend-bar-fill" style="height:${pct}%"></div></div>
+        <span class="trend-month">${label}</span>
+      </div>`;
+  });
+  html += '</div>';
+  container.innerHTML = html;
+}
+
 function renderTabs() {
   const tabs = document.getElementById('profileTabs');
   tabs.innerHTML = '';
@@ -350,7 +416,7 @@ function renderTabs() {
   allTab.textContent = 'All';
   allTab.addEventListener('click', () => {
     activeProfileFilter = 'all';
-    renderTabs(); renderTransactions(); renderCategoryChart(); renderProfiles();
+    renderTabs(); renderTransactions(); renderCategoryChart(); renderTrendChart(); renderProfiles();
   });
   tabs.appendChild(allTab);
 
@@ -360,7 +426,7 @@ function renderTabs() {
     btn.textContent = `${p.emoji} ${p.name}`;
     btn.addEventListener('click', () => {
       activeProfileFilter = p.id;
-      renderTabs(); renderTransactions(); renderCategoryChart(); renderProfiles();
+      renderTabs(); renderTransactions(); renderCategoryChart(); renderTrendChart(); renderProfiles();
     });
     tabs.appendChild(btn);
   });
@@ -399,7 +465,7 @@ async function deleteExpense(id) {
   if (!confirm('Delete this expense?')) return;
   const { error } = await sb.from('expenses').delete().eq('id', id);
   if (error) { toast('Delete failed: ' + error.message); return; }
-  await loadMonthData();
+  await loadAllData();
   renderAll();
   toast('Expense deleted');
 }
@@ -409,6 +475,7 @@ function renderAll() {
   renderStats();
   renderProfiles();
   renderCategoryChart();
+  renderTrendChart();
   renderTabs();
   renderTransactions();
 }
@@ -533,7 +600,7 @@ async function confirmImport() {
   if (error) { toast('Import failed: ' + error.message); return; }
   toast(`Imported ${inserts.length} expense(s)`);
   pendingImportRows = [];
-  await loadMonthData();
+  await loadAllData();
   renderAll();
 }
 
@@ -597,7 +664,7 @@ async function saveExpense() {
   if (expenseMonth.getTime() !== currentMonth.getTime()) {
     currentMonth = expenseMonth;
   }
-  await loadMonthData();
+  await loadAllData();
   renderAll();
 }
 
@@ -640,12 +707,12 @@ async function init() {
 
   document.getElementById('prevMonth').addEventListener('click', async () => {
     currentMonth = addMonths(currentMonth, -1);
-    await loadMonthData();
+    await loadAllData();
     renderAll();
   });
   document.getElementById('nextMonth').addEventListener('click', async () => {
     currentMonth = addMonths(currentMonth, 1);
-    await loadMonthData();
+    await loadAllData();
     renderAll();
   });
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
@@ -698,7 +765,7 @@ async function init() {
     return;
   }
 
-  await loadMonthData();
+  await loadAllData();
   renderAll();
 }
 
