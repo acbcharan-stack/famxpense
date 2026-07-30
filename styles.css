@@ -461,6 +461,34 @@ table.data-table td.num, table.data-table th.num {
 
 /* ---------- transactions ---------- */
 
+.section-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 28px 0 12px;
+}
+.section-title-row .section-title { margin: 0; }
+
+.txn-tools {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.import-summary {
+  font-size: 0.9rem;
+  margin-bottom: 12px;
+  color: var(--text-secondary);
+}
+.import-summary strong { color: var(--text-primary); }
+
+#importPreviewWrap {
+  max-height: 240px;
+  overflow-y: auto;
+}
+
 .tabs {
   display: flex;
   gap: 6px;
@@ -633,6 +661,7 @@ table.data-table td.num, table.data-table th.num {
 .btn-primary { background: var(--series-1); color: #fff; }
 .btn-ghost { background: transparent; color: var(--text-secondary); }
 .btn-ghost:hover { background: var(--gridline); }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .toast {
   position: fixed;

@@ -1,4 +1,5 @@
 import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+import * as XLSX from 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm';
 
 const SUPABASE_URL = 'https://pxjryedxetccuxqclbjz.supabase.co';
 const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4anJ5ZWR4ZXRjY3V4cWNsYmp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzODcwODMsImV4cCI6MjEwMDk2MzA4M30.GtqP4UfllbMuq0FpG9Ct9Ira7YilEUOXT0RzRB1HZM0';
@@ -116,7 +117,7 @@ function computeProfileStats(profileId) {
   const budgetAmt = budgetRow ? Number(budgetRow.amount) : 0;
   const spent = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
   const remaining = budgetAmt - spent;
-  const pct = budgetAmt > 0 ? (spent / budgetAmt) * 100 : (spent > 0 ? 100 : 0);
+  const pct = budgetAmt > 0 ? (spent / budgetAmt) * 100 : (spent > 0 ? 101 : 0);
   return { budgetAmt, spent, remaining, pct, status: statusFor(pct) };
 }
 
@@ -139,7 +140,7 @@ function renderStats() {
     totalSpent += s.spent;
   });
   const remaining = totalBudget - totalSpent;
-  const pct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : (totalSpent > 0 ? 100 : 0);
+  const pct = totalBudget > 0 ? (totalSpent / totalBudget) * 100 : (totalSpent > 0 ? 101 : 0);
   const status = statusFor(pct);
 
   document.getElementById('statBudget').textContent = fmtMoney(totalBudget);
@@ -162,7 +163,7 @@ function renderStats() {
   fill.className = 'progress-fill ' + status;
 
   const statusText = document.getElementById('overallStatusText');
-  statusText.textContent = `${statusLabel(status)} · ${pct.toFixed(0)}%`;
+  statusText.textContent = `${statusLabel(status)} · ${Math.min(pct, 100).toFixed(0)}%`;
   statusText.className = 'status-text ' + status;
 }
 
@@ -412,6 +413,130 @@ function renderAll() {
   renderTransactions();
 }
 
+// ---------- excel import / export ----------
+
+const EXCEL_HEADERS = ['Date', 'Profile', 'Category', 'Amount', 'Note'];
+let pendingImportRows = [];
+
+function exportToExcel() {
+  const data = filteredExpenses();
+  if (data.length === 0) { toast('Nothing to export for this view'); return; }
+
+  const rows = data.map(e => {
+    const profile = profiles.find(p => p.id === e.profile_id);
+    return {
+      Date: e.expense_date,
+      Profile: profile?.name || '',
+      Category: e.category,
+      Amount: Number(e.amount),
+      Note: e.note || '',
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(rows, { header: EXCEL_HEADERS });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Expenses');
+
+  const profileLabel = (activeProfileFilter === 'all' ? 'All' : (profiles.find(p => p.id === activeProfileFilter)?.name || 'Profile')).replace(/\s+/g, '_');
+  const monthLabel = currentMonth.toLocaleString(undefined, { month: 'short', year: 'numeric' }).replace(/\s+/g, '_');
+  XLSX.writeFile(wb, `expenses_${profileLabel}_${monthLabel}.xlsx`);
+  toast(`Exported ${rows.length} row(s)`);
+}
+
+function downloadTemplate() {
+  const sample = [{ Date: fmtDateISO(new Date()), Profile: profiles[0]?.name || 'Profile 1', Category: 'Food', Amount: 12.5, Note: 'example row - delete me' }];
+  const ws = XLSX.utils.json_to_sheet(sample, { header: EXCEL_HEADERS });
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, 'Expenses');
+  XLSX.writeFile(wb, 'expense_import_template.xlsx');
+}
+
+function excelDateToISO(val) {
+  if (val instanceof Date && !isNaN(val.getTime())) return fmtDateISO(val);
+  const s = String(val ?? '').trim();
+  if (!s) return null;
+  const parsed = new Date(s);
+  return isNaN(parsed.getTime()) ? null : fmtDateISO(parsed);
+}
+
+async function handleImportFile(file) {
+  let wb;
+  try {
+    const buf = await file.arrayBuffer();
+    wb = XLSX.read(buf, { type: 'array', cellDates: true });
+  } catch (err) {
+    toast('Could not read file: ' + err.message);
+    return;
+  }
+
+  const sheet = wb.Sheets[wb.SheetNames[0]];
+  const rows = XLSX.utils.sheet_to_json(sheet, { defaultValue: '' });
+
+  const valid = [];
+  let skipped = 0;
+  const skipReasons = [];
+
+  rows.forEach((row, idx) => {
+    const profileName = String(row.Profile || '').trim();
+    const profile = profiles.find(p => p.name.toLowerCase() === profileName.toLowerCase());
+    const amount = parseFloat(row.Amount);
+    const dateISO = excelDateToISO(row.Date);
+    const category = String(row.Category || '').trim() || 'Other';
+    const note = String(row.Note || '').trim();
+
+    if (!profile || isNaN(amount) || amount <= 0 || !dateISO) {
+      skipped++;
+      const reason = !profile ? `unknown profile "${profileName}"` : (isNaN(amount) || amount <= 0) ? 'invalid amount' : 'invalid date';
+      skipReasons.push(`Row ${idx + 2}: ${reason}`);
+      return;
+    }
+    valid.push({
+      profile_id: profile.id, amount, category, note: note || null, expense_date: dateISO,
+      _preview: { profileName: profile.name, amount, category, dateISO, note },
+    });
+  });
+
+  pendingImportRows = valid;
+  showImportSummary(rows.length, valid, skipped, skipReasons);
+}
+
+function showImportSummary(total, valid, skipped, skipReasons) {
+  const summary = document.getElementById('importSummary');
+  const previewWrap = document.getElementById('importPreviewWrap');
+  summary.innerHTML = `Found <strong>${total}</strong> row(s): <strong>${valid.length}</strong> ready to import, <strong>${skipped}</strong> skipped.`;
+
+  let html = '';
+  if (valid.length > 0) {
+    html += '<table class="data-table"><thead><tr><th>Date</th><th>Profile</th><th>Category</th><th class="num">Amount</th><th>Note</th></tr></thead><tbody>';
+    valid.slice(0, 20).forEach(r => {
+      html += `<tr><td>${r._preview.dateISO}</td><td>${escapeHtml(r._preview.profileName)}</td><td>${escapeHtml(r._preview.category)}</td><td class="num">${fmtMoney(r._preview.amount)}</td><td>${escapeHtml(r._preview.note)}</td></tr>`;
+    });
+    if (valid.length > 20) html += `<tr><td colspan="5" class="empty-note">…and ${valid.length - 20} more</td></tr>`;
+    html += '</tbody></table>';
+  } else {
+    html += '<div class="empty-note">No valid rows to import.</div>';
+  }
+  if (skipped > 0) {
+    html += `<div class="empty-note">${skipReasons.slice(0, 10).map(escapeHtml).join('<br>')}${skipReasons.length > 10 ? '<br>…' : ''}</div>`;
+  }
+  previewWrap.innerHTML = html;
+
+  document.getElementById('importConfirm').disabled = valid.length === 0;
+  document.getElementById('importOverlay').classList.add('open');
+}
+
+async function confirmImport() {
+  if (pendingImportRows.length === 0) return;
+  const inserts = pendingImportRows.map(({ _preview, ...rest }) => rest);
+  const { error } = await sb.from('expenses').insert(inserts);
+  document.getElementById('importOverlay').classList.remove('open');
+  if (error) { toast('Import failed: ' + error.message); return; }
+  toast(`Imported ${inserts.length} expense(s)`);
+  pendingImportRows = [];
+  await loadMonthData();
+  renderAll();
+}
+
 // ---------- modal ----------
 
 function renderModalProfilePicker() {
@@ -537,6 +662,20 @@ async function init() {
     chartTableView = !chartTableView;
     document.getElementById('toggleTableView').textContent = chartTableView ? 'View as chart' : 'View as table';
     renderCategoryChart();
+  });
+
+  document.getElementById('exportBtn').addEventListener('click', exportToExcel);
+  document.getElementById('downloadTemplateBtn').addEventListener('click', downloadTemplate);
+  document.getElementById('importBtn').addEventListener('click', () => document.getElementById('importFile').click());
+  document.getElementById('importFile').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (file) handleImportFile(file);
+    e.target.value = '';
+  });
+  document.getElementById('importCancel').addEventListener('click', () => document.getElementById('importOverlay').classList.remove('open'));
+  document.getElementById('importConfirm').addEventListener('click', confirmImport);
+  document.getElementById('importOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'importOverlay') document.getElementById('importOverlay').classList.remove('open');
   });
 
   try {

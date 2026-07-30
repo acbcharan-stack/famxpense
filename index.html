@@ -56,7 +56,15 @@
     <div id="categoryChart"><div class="empty-note">No expenses yet this month.</div></div>
   </div>
 
-  <div class="section-title">Transactions</div>
+  <div class="section-title-row">
+    <div class="section-title">Transactions</div>
+    <div class="txn-tools">
+      <button class="link-btn" id="downloadTemplateBtn">Download template</button>
+      <button class="link-btn" id="importBtn">Import Excel</button>
+      <button class="link-btn" id="exportBtn">Export Excel</button>
+      <input type="file" id="importFile" accept=".xlsx,.xls,.csv" hidden />
+    </div>
+  </div>
   <div class="tabs" id="profileTabs"></div>
   <div class="txn-list" id="txnList"><div class="empty-note">Loading…</div></div>
 
@@ -95,6 +103,18 @@
 </div>
 
 <div class="toast" id="toast"></div>
+
+<div class="modal-overlay" id="importOverlay">
+  <div class="modal">
+    <h2>Import expenses</h2>
+    <div id="importSummary" class="import-summary"></div>
+    <div id="importPreviewWrap"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="importCancel">Cancel</button>
+      <button class="btn btn-primary" id="importConfirm">Import</button>
+    </div>
+  </div>
+</div>
 
 <div class="lock-overlay" id="lockOverlay">
   <div class="lock-box">
