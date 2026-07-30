@@ -46,7 +46,7 @@ function setupLock() {
   });
 }
 
-const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Other'];
+const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
 
 let profiles = [];
 let currentMonth = startOfMonth(new Date());
