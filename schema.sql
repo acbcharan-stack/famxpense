@@ -1,0 +1,59 @@
+-- Family Expense Tracker — run this once in the Supabase SQL Editor
+-- (Project: acb.charan account, https://pxjryedxetccuxqclbjz.supabase.co)
+
+create extension if not exists pgcrypto;
+
+create table if not exists profiles (
+  id uuid primary key default gen_random_uuid(),
+  name text not null,
+  emoji text not null default '🙂',
+  color text not null default '#2a78d6',
+  sort_order int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists expenses (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  amount numeric(10,2) not null check (amount > 0),
+  category text not null default 'Other',
+  note text,
+  expense_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
+create table if not exists budgets (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  month date not null,
+  amount numeric(10,2) not null check (amount >= 0),
+  created_at timestamptz not null default now(),
+  unique (profile_id, month)
+);
+
+create index if not exists expenses_profile_date_idx on expenses (profile_id, expense_date);
+create index if not exists budgets_profile_month_idx on budgets (profile_id, month);
+
+-- Seed exactly 4 profiles, only if the table is empty
+insert into profiles (name, emoji, color, sort_order)
+select v.name, v.emoji, v.color, v.sort_order
+from (values
+  ('Profile 1', '🧑', '#2a78d6', 1),
+  ('Profile 2', '🧑‍🦱', '#eb6834', 2),
+  ('Profile 3', '🧑‍🦳', '#1baf7a', 3),
+  ('Profile 4', '🧑‍🎤', '#eda100', 4)
+) as v(name, emoji, color, sort_order)
+where not exists (select 1 from profiles);
+
+-- Private family app, no login screen: allow the anon key full access.
+alter table profiles enable row level security;
+alter table expenses enable row level security;
+alter table budgets enable row level security;
+
+drop policy if exists "allow all profiles" on profiles;
+drop policy if exists "allow all expenses" on expenses;
+drop policy if exists "allow all budgets" on budgets;
+
+create policy "allow all profiles" on profiles for all using (true) with check (true);
+create policy "allow all expenses" on expenses for all using (true) with check (true);
+create policy "allow all budgets" on budgets for all using (true) with check (true);

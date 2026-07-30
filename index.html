@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Family Expense Tracker</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="app">
+
+  <div class="topbar">
+    <h1>💸 Family Expense Tracker</h1>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <div class="month-nav">
+        <button id="prevMonth" aria-label="Previous month">‹</button>
+        <span class="month-label" id="monthLabel">—</span>
+        <button id="nextMonth" aria-label="Next month">›</button>
+      </div>
+      <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
+    </div>
+  </div>
+
+  <div class="stat-row">
+    <div class="stat-tile">
+      <div class="label">Total Budget (4 profiles)</div>
+      <div class="value" id="statBudget">$0</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label">Total Spent</div>
+      <div class="value" id="statSpent">$0</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label" id="statRemainingLabel">Remaining</div>
+      <div class="value" id="statRemaining">$0</div>
+    </div>
+  </div>
+
+  <div class="overall-progress">
+    <div class="row">
+      <strong>Combined budget usage</strong>
+      <span class="status-text" id="overallStatusText">—</span>
+    </div>
+    <div class="progress-track"><div class="progress-fill" id="overallFill" style="width:0%"></div></div>
+  </div>
+
+  <div class="section-title">Profiles</div>
+  <div class="profile-grid" id="profileGrid"></div>
+
+  <div class="section-title">Spending by category</div>
+  <div class="chart-card">
+    <div class="chart-card-head">
+      <strong id="chartHeading">All profiles — this month</strong>
+      <button class="link-btn" id="toggleTableView">View as table</button>
+    </div>
+    <div id="categoryChart"><div class="empty-note">No expenses yet this month.</div></div>
+  </div>
+
+  <div class="section-title">Transactions</div>
+  <div class="tabs" id="profileTabs"></div>
+  <div class="txn-list" id="txnList"><div class="empty-note">Loading…</div></div>
+
+</div>
+
+<button class="fab" id="fabAdd" title="Add expense">+</button>
+
+<div class="modal-overlay" id="modalOverlay">
+  <div class="modal">
+    <h2>Add expense</h2>
+    <div class="field">
+      <label>Profile</label>
+      <div class="profile-picker" id="modalProfilePicker"></div>
+    </div>
+    <div class="field">
+      <label for="fAmount">Amount</label>
+      <input type="number" id="fAmount" min="0.01" step="0.01" placeholder="0.00" />
+    </div>
+    <div class="field">
+      <label for="fCategory">Category</label>
+      <select id="fCategory"></select>
+    </div>
+    <div class="field">
+      <label for="fDate">Date</label>
+      <input type="date" id="fDate" />
+    </div>
+    <div class="field">
+      <label for="fNote">Note (optional)</label>
+      <input type="text" id="fNote" placeholder="e.g. groceries at Costco" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="modalCancel">Cancel</button>
+      <button class="btn btn-primary" id="modalSave">Save expense</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-box">
+    <div class="lock-emoji">🔒</div>
+    <h2>Family Expense Tracker</h2>
+    <p>Enter the family passcode to continue.</p>
+    <input type="password" id="lockInput" inputmode="numeric" autocomplete="off" placeholder="Passcode" />
+    <button class="btn btn-primary" id="lockSubmit">Unlock</button>
+    <div class="lock-error" id="lockError"></div>
+  </div>
+</div>
+
+<script type="module" src="app.js"></script>
+</body>
+</html>
