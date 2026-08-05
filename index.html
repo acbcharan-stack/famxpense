@@ -45,6 +45,21 @@
     <div class="progress-track"><div class="progress-fill" id="overallFill" style="width:0%"></div></div>
   </div>
 
+  <div class="section-title-row">
+    <div class="section-title">Savings & Investment</div>
+    <a class="link-btn" href="investments.html">Manage investments →</a>
+  </div>
+  <div class="stat-row" id="investStatRow"></div>
+  <div class="invest-empty-note" id="investEmptyNote" style="display:none;">
+    No investments yet. <a href="investments.html">Add your first investment →</a>
+  </div>
+  <div class="invest-custom-row">
+    <label for="investCustomYears">Projected value in</label>
+    <input type="number" id="investCustomYears" min="1" max="60" value="15" />
+    <label for="investCustomYears">years</label>
+    <strong id="investCustomValue">₹0</strong>
+  </div>
+
   <div class="section-title">Profiles</div>
   <div class="profile-grid" id="profileGrid"></div>
 
