@@ -49,9 +49,13 @@ function renderList() {
     const card = document.createElement('div');
     card.className = 'investment-card';
     const dateStr = new Date(inv.start_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    const title = inv.name ? inv.name : inv.type;
     card.innerHTML = `
       <div class="investment-head">
-        <div class="investment-type">${escapeHtml(inv.type)}</div>
+        <div class="investment-type">
+          ${escapeHtml(title)}
+          ${inv.name ? `<span class="investment-subtype">${escapeHtml(inv.type)}</span>` : ''}
+        </div>
         <button class="txn-del" title="Delete">🗑️</button>
       </div>
       <div class="investment-numbers">
@@ -84,6 +88,7 @@ async function deleteInvestment(id) {
 function openModal(inv) {
   editingId = inv ? inv.id : null;
   document.getElementById('investModalTitle').textContent = inv ? 'Edit investment' : 'Add investment';
+  document.getElementById('iName').value = inv ? (inv.name || '') : '';
   document.getElementById('iType').value = inv ? inv.type : '';
   document.getElementById('iAmount').value = inv ? inv.amount : '';
   document.getElementById('iReturn').value = inv ? inv.annual_return : '';
@@ -96,6 +101,7 @@ function closeModal() {
 }
 
 async function saveInvestment() {
+  const name = document.getElementById('iName').value.trim();
   const type = document.getElementById('iType').value.trim();
   const amount = parseFloat(document.getElementById('iAmount').value);
   const annualReturn = parseFloat(document.getElementById('iReturn').value);
@@ -106,7 +112,7 @@ async function saveInvestment() {
   if (isNaN(annualReturn) || annualReturn < 0) { toast('Enter a valid expected return'); return; }
   if (!startDate) { toast('Pick a start date'); return; }
 
-  const payload = { type, amount, annual_return: annualReturn, start_date: startDate };
+  const payload = { name: name || null, type, amount, annual_return: annualReturn, start_date: startDate };
   const { error } = editingId
     ? await sb.from('investments').update(payload).eq('id', editingId)
     : await sb.from('investments').insert(payload);

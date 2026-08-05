@@ -872,6 +872,13 @@ table.data-table td.num, table.data-table th.num {
   font-size: 1rem;
 }
 
+.investment-subtype {
+  font-weight: 400;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  margin-left: 8px;
+}
+
 .investment-numbers {
   display: flex;
   gap: 16px;
