@@ -1,50 +1,10 @@
-import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 import * as XLSX from 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm';
-
-const SUPABASE_URL = 'https://pxjryedxetccuxqclbjz.supabase.co';
-const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB4anJ5ZWR4ZXRjY3V4cWNsYmp6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODUzODcwODMsImV4cCI6MjEwMDk2MzA4M30.GtqP4UfllbMuq0FpG9Ct9Ira7YilEUOXT0RzRB1HZM0';
-
-const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-
-const PASSCODE_HASH = '0a95adbf8581859ae0cc477127abeaf4ad89916405c41855af8fbc482e1634e8';
-const UNLOCK_KEY = 'famExpenseUnlocked';
-
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-function setupLock() {
-  const overlay = document.getElementById('lockOverlay');
-  const input = document.getElementById('lockInput');
-  const error = document.getElementById('lockError');
-  const submitBtn = document.getElementById('lockSubmit');
-
-  if (localStorage.getItem(UNLOCK_KEY) === '1') {
-    overlay.classList.add('hidden');
-    return Promise.resolve();
-  }
-
-  return new Promise((resolve) => {
-    const tryUnlock = async () => {
-      const val = input.value.trim();
-      if (!val) return;
-      const hash = await sha256Hex(val);
-      if (hash === PASSCODE_HASH) {
-        localStorage.setItem(UNLOCK_KEY, '1');
-        overlay.classList.add('hidden');
-        resolve();
-      } else {
-        error.textContent = 'Incorrect passcode. Try again.';
-        input.value = '';
-        input.focus();
-      }
-    };
-    submitBtn.addEventListener('click', tryUnlock);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-    input.focus();
-  });
-}
+import {
+  sb, setupLock, toast, fmtMoney, hexToRgba, escapeHtml,
+  pad, fmtDateISO, startOfMonth, addMonths,
+  applyStoredTheme, toggleTheme,
+  INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
+} from './common.js';
 
 const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
 
@@ -52,6 +12,7 @@ let profiles = [];
 let currentMonth = startOfMonth(new Date());
 let expenses = [];
 let budgets = [];
+let investments = [];
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
@@ -61,19 +22,6 @@ let trendExpenses = [];
 
 // ---------- helpers ----------
 
-function pad(n) { return String(n).padStart(2, '0'); }
-function fmtDateISO(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
-function startOfMonth(d) { return new Date(d.getFullYear(), d.getMonth(), 1); }
-function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() + n, 1); }
-function fmtMoney(n) {
-  const v = Number(n) || 0;
-  return (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-function hexToRgba(hex, alpha) {
-  const h = (hex || '#2a78d6').replace('#', '');
-  const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
-  return `rgba(${r},${g},${b},${alpha})`;
-}
 function statusFor(pct) {
   if (pct > 100) return 'critical';
   if (pct >= 80) return 'warning';
@@ -81,14 +29,6 @@ function statusFor(pct) {
 }
 function statusLabel(status) {
   return status === 'critical' ? '⛔ Over budget' : status === 'warning' ? '⚠️ Near limit' : '✅ On track';
-}
-
-function toast(msg) {
-  const el = document.getElementById('toast');
-  el.textContent = msg;
-  el.classList.add('show');
-  clearTimeout(toast._t);
-  toast._t = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
 // ---------- data loading ----------
@@ -128,8 +68,14 @@ async function loadTrendData() {
   trendExpenses = data || [];
 }
 
+async function loadInvestments() {
+  const { data, error } = await sb.from('investments').select('*');
+  if (error) { toast('Error loading investments: ' + error.message); throw error; }
+  investments = data || [];
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments()]);
 }
 
 function computeProfileStats(profileId) {
@@ -313,12 +259,6 @@ function startBudgetEdit(card, profile, currentAmt) {
   });
 }
 
-function escapeHtml(str) {
-  const div = document.createElement('div');
-  div.textContent = str;
-  return div.innerHTML;
-}
-
 function renderCategoryChart() {
   const heading = document.getElementById('chartHeading');
   const container = document.getElementById('categoryChart');
@@ -327,21 +267,30 @@ function renderCategoryChart() {
   const profileLabel = activeProfileFilter === 'all' ? 'All profiles' : (profiles.find(p => p.id === activeProfileFilter)?.name || 'Profile');
   heading.textContent = `${profileLabel} — this month`;
 
-  if (data.length === 0) {
+  const totals = {};
+  data.forEach(e => { totals[e.category] = (totals[e.category] || 0) + Number(e.amount); });
+
+  // "Savings & Investment" reflects real invested principal (from the Investments page), not
+  // just this month's logged expenses under that category — only shown in the "all profiles" view
+  // since investments aren't tied to a profile.
+  const investedTotal = sumInvested(investments);
+  if (investedTotal > 0 && activeProfileFilter === 'all') totals[INVESTMENT_CATEGORY] = investedTotal;
+
+  const rows = Object.entries(totals).sort((a, b) => b[1] - a[1]);
+
+  if (rows.length === 0) {
     container.innerHTML = '<div class="empty-note">No expenses yet this month.</div>';
     return;
   }
 
-  const totals = {};
-  data.forEach(e => { totals[e.category] = (totals[e.category] || 0) + Number(e.amount); });
-  const rows = Object.entries(totals).sort((a, b) => b[1] - a[1]);
   const total = rows.reduce((s, r) => s + r[1], 0);
   const max = rows[0][1];
 
   if (chartTableView) {
     let html = '<table class="data-table"><thead><tr><th>Category</th><th class="num">Amount</th><th class="num">% of total</th></tr></thead><tbody>';
     rows.forEach(([cat, amt]) => {
-      html += `<tr><td>${escapeHtml(cat)}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${((amt / total) * 100).toFixed(0)}%</td></tr>`;
+      const isInvestment = cat === INVESTMENT_CATEGORY;
+      html += `<tr class="${isInvestment ? 'investment-row' : ''}"><td>${escapeHtml(cat)}${isInvestment ? ' <span class="cat-badge">↗ Investments</span>' : ''}</td><td class="num">${fmtMoney(amt)}</td><td class="num">${((amt / total) * 100).toFixed(0)}%</td></tr>`;
     });
     html += '</tbody></table>';
     container.innerHTML = html;
@@ -350,16 +299,21 @@ function renderCategoryChart() {
     rows.forEach(([cat, amt]) => {
       const pctOfMax = (amt / max) * 100;
       const pctOfTotal = ((amt / total) * 100).toFixed(0);
+      const isInvestment = cat === INVESTMENT_CATEGORY;
       html += `
-        <div class="bar-row">
-          <span class="cat-label">${escapeHtml(cat)}</span>
+        <div class="bar-row${isInvestment ? ' investment-row' : ''}">
+          <span class="cat-label">${escapeHtml(cat)}${isInvestment ? ' <span class="cat-badge">↗</span>' : ''}</span>
           <div class="bar-track"><div class="bar-fill" style="width:${pctOfMax}%"></div></div>
           <span class="cat-value">${fmtMoney(amt)}</span>
-          <span class="bar-tooltip">${escapeHtml(cat)}: ${fmtMoney(amt)} (${pctOfTotal}% of total)</span>
+          <span class="bar-tooltip">${escapeHtml(cat)}: ${fmtMoney(amt)}${isInvestment ? ' (total invested)' : ' (' + pctOfTotal + '% of total)'}</span>
         </div>`;
     });
     container.innerHTML = html;
   }
+
+  container.querySelectorAll('.investment-row').forEach(el => {
+    el.addEventListener('click', () => { window.location.href = 'investments.html'; });
+  });
 }
 
 function monthKey(d) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}`; }
@@ -470,6 +424,38 @@ async function deleteExpense(id) {
   toast('Expense deleted');
 }
 
+function renderInvestmentDashboard() {
+  const row = document.getElementById('investStatRow');
+  const emptyNote = document.getElementById('investEmptyNote');
+  if (!row) return;
+
+  const totalInvested = sumInvested(investments);
+  let html = `
+    <div class="stat-tile">
+      <div class="label">Total Invested</div>
+      <div class="value">${fmtMoney(totalInvested)}</div>
+    </div>`;
+  PROJECTION_MILESTONES.forEach(y => {
+    html += `
+      <div class="stat-tile">
+        <div class="label">In ${y} years</div>
+        <div class="value">${fmtMoney(totalProjected(investments, y))}</div>
+      </div>`;
+  });
+  row.innerHTML = html;
+
+  emptyNote.style.display = investments.length === 0 ? 'block' : 'none';
+  updateCustomProjection();
+}
+
+function updateCustomProjection() {
+  const yearsInput = document.getElementById('investCustomYears');
+  const valueEl = document.getElementById('investCustomValue');
+  if (!yearsInput || !valueEl) return;
+  const years = Math.max(1, parseInt(yearsInput.value, 10) || 1);
+  valueEl.textContent = fmtMoney(totalProjected(investments, years));
+}
+
 function renderAll() {
   renderMonthLabel();
   renderStats();
@@ -478,6 +464,7 @@ function renderAll() {
   renderTrendChart();
   renderTabs();
   renderTransactions();
+  renderInvestmentDashboard();
 }
 
 // ---------- excel import / export ----------
@@ -668,31 +655,6 @@ async function saveExpense() {
   renderAll();
 }
 
-// ---------- theme ----------
-
-function applyStoredTheme() {
-  const stored = localStorage.getItem('theme');
-  if (stored === 'dark' || stored === 'light') {
-    document.documentElement.setAttribute('data-theme', stored);
-  }
-  updateThemeIcon();
-}
-
-function updateThemeIcon() {
-  const explicit = document.documentElement.getAttribute('data-theme');
-  const effectiveDark = explicit ? explicit === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
-  document.getElementById('themeToggle').textContent = effectiveDark ? '☀️' : '🌙';
-}
-
-function toggleTheme() {
-  const explicit = document.documentElement.getAttribute('data-theme');
-  const effectiveDark = explicit ? explicit === 'dark' : window.matchMedia('(prefers-color-scheme: dark)').matches;
-  const next = effectiveDark ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-theme', next);
-  localStorage.setItem('theme', next);
-  updateThemeIcon();
-}
-
 // ---------- init ----------
 
 async function init() {
@@ -730,6 +692,7 @@ async function init() {
     document.getElementById('toggleTableView').textContent = chartTableView ? 'View as chart' : 'View as table';
     renderCategoryChart();
   });
+  document.getElementById('investCustomYears').addEventListener('input', updateCustomProjection);
 
   document.getElementById('exportBtn').addEventListener('click', exportToExcel);
   document.getElementById('downloadTemplateBtn').addEventListener('click', downloadTemplate);

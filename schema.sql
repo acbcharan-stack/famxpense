@@ -31,8 +31,18 @@ create table if not exists budgets (
   unique (profile_id, month)
 );
 
+create table if not exists investments (
+  id uuid primary key default gen_random_uuid(),
+  type text not null,
+  amount numeric(12,2) not null check (amount >= 0),
+  annual_return numeric(5,2) not null default 0,
+  start_date date not null default current_date,
+  created_at timestamptz not null default now()
+);
+
 create index if not exists expenses_profile_date_idx on expenses (profile_id, expense_date);
 create index if not exists budgets_profile_month_idx on budgets (profile_id, month);
+create index if not exists investments_start_date_idx on investments (start_date);
 
 -- Seed exactly 4 profiles, only if the table is empty
 insert into profiles (name, emoji, color, sort_order)
@@ -49,11 +59,14 @@ where not exists (select 1 from profiles);
 alter table profiles enable row level security;
 alter table expenses enable row level security;
 alter table budgets enable row level security;
+alter table investments enable row level security;
 
 drop policy if exists "allow all profiles" on profiles;
 drop policy if exists "allow all expenses" on expenses;
 drop policy if exists "allow all budgets" on budgets;
+drop policy if exists "allow all investments" on investments;
 
 create policy "allow all profiles" on profiles for all using (true) with check (true);
 create policy "allow all expenses" on expenses for all using (true) with check (true);
 create policy "allow all budgets" on budgets for all using (true) with check (true);
+create policy "allow all investments" on investments for all using (true) with check (true);
