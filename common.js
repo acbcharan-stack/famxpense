@@ -115,10 +115,71 @@ export function projectedValue(amount, annualReturnPct, years) {
   return Number(amount) * Math.pow(1 + r / 100, t);
 }
 
+// Whole months between an ISO start date and a target date (never negative).
+export function monthsBetween(startDateStr, asOf = new Date()) {
+  const start = new Date(startDateStr + 'T00:00:00');
+  let months = (asOf.getFullYear() - start.getFullYear()) * 12 + (asOf.getMonth() - start.getMonth());
+  if (asOf.getDate() < start.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+
+// Future value of a monthly SIP (annuity due — contribution at the start of each month).
+export function sipFutureValue(monthlyAmount, annualReturnPct, months) {
+  const p = Number(monthlyAmount) || 0;
+  const n = Math.max(0, Math.round(Number(months) || 0));
+  if (p <= 0 || n === 0) return 0;
+  const i = (Number(annualReturnPct) || 0) / 100 / 12;
+  if (i === 0) return p * n;
+  return p * ((Math.pow(1 + i, n) - 1) / i) * (1 + i);
+}
+
+// A SIP's rate can change over time: sipHistory is [{ date, amount }, ...] sorted ascending,
+// each entry's amount applying from its date until the next entry's date (or today).
+export function sipInvestedToDate(sipHistory, asOf = new Date()) {
+  if (!Array.isArray(sipHistory) || sipHistory.length === 0) return 0;
+  const sorted = [...sipHistory].sort((a, b) => a.date.localeCompare(b.date));
+  let total = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const periodStart = sorted[i].date;
+    if (new Date(periodStart + 'T00:00:00') > asOf) break;
+    const periodEndDate = i + 1 < sorted.length ? new Date(sorted[i + 1].date + 'T00:00:00') : asOf;
+    const months = monthsBetween(periodStart, periodEndDate > asOf ? asOf : periodEndDate);
+    total += (Number(sorted[i].amount) || 0) * months;
+  }
+  return total;
+}
+
+// The SIP amount currently in effect (most recent entry whose date has arrived).
+export function sipCurrentRate(sipHistory, asOf = new Date()) {
+  if (!Array.isArray(sipHistory) || sipHistory.length === 0) return 0;
+  const active = sipHistory.filter(h => new Date(h.date + 'T00:00:00') <= asOf);
+  if (active.length === 0) return 0;
+  return Number(active.reduce((a, b) => (a.date > b.date ? a : b)).amount) || 0;
+}
+
+// Total invested so far: base/top-up amount + everything contributed through the SIP schedule.
+export function investedAmount(inv) {
+  if (inv.investment_mode === 'sip') {
+    return (Number(inv.amount) || 0) + sipInvestedToDate(inv.sip_history);
+  }
+  return Number(inv.amount) || 0;
+}
+
+// Projected value `years` from now: existing corpus grows at the expected return, and — for
+// SIPs — contributions keep going at the current monthly rate for the projection horizon.
+export function investmentProjectedValue(inv, years) {
+  const grown = projectedValue(investedAmount(inv), inv.annual_return, years);
+  if (inv.investment_mode === 'sip') {
+    const futureContributions = sipFutureValue(sipCurrentRate(inv.sip_history), inv.annual_return, (Number(years) || 0) * 12);
+    return grown + futureContributions;
+  }
+  return grown;
+}
+
 export function sumInvested(investments) {
-  return investments.reduce((s, inv) => s + Number(inv.amount), 0);
+  return investments.reduce((s, inv) => s + investedAmount(inv), 0);
 }
 
 export function totalProjected(investments, years) {
-  return investments.reduce((s, inv) => s + projectedValue(inv.amount, inv.annual_return, years), 0);
+  return investments.reduce((s, inv) => s + investmentProjectedValue(inv, years), 0);
 }

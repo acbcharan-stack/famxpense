@@ -35,13 +35,27 @@ create table if not exists investments (
   id uuid primary key default gen_random_uuid(),
   name text,
   type text not null,
-  amount numeric(12,2) not null check (amount >= 0),
+  amount numeric(12,2) not null default 0 check (amount >= 0),
   annual_return numeric(5,2) not null default 0,
   start_date date not null default current_date,
+  investment_mode text not null default 'lumpsum' check (investment_mode in ('lumpsum', 'sip')),
+  sip_history jsonb,
   created_at timestamptz not null default now()
 );
 
 alter table investments add column if not exists name text;
+alter table investments alter column amount set default 0;
+alter table investments add column if not exists investment_mode text not null default 'lumpsum';
+alter table investments add column if not exists sip_history jsonb;
+do $$
+begin
+  if not exists (
+    select 1 from pg_constraint where conname = 'investments_investment_mode_check'
+  ) then
+    alter table investments add constraint investments_investment_mode_check
+      check (investment_mode in ('lumpsum', 'sip'));
+  end if;
+end $$;
 
 create index if not exists expenses_profile_date_idx on expenses (profile_id, expense_date);
 create index if not exists budgets_profile_month_idx on budgets (profile_id, month);

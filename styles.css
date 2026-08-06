@@ -894,6 +894,18 @@ table.data-table td.num, table.data-table th.num {
   color: var(--muted);
 }
 
+.sip-change-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.sip-change-row input[type="date"] { flex: 1; min-width: 0; }
+.sip-change-row input[type="number"] { flex: 1; min-width: 0; }
+.sip-change-row .sipChangeRemove { flex-shrink: 0; font-size: 0.85rem; }
+
+.btn-sm { padding: 6px 12px; font-size: 0.8rem; }
+
 @media (max-width: 480px) {
   .topbar h1 { font-size: 1.15rem; }
   .bar-row { grid-template-columns: 84px 1fr 56px; }
