@@ -2,7 +2,7 @@ import {
   sb, setupLock, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
-  investedAmount, investmentProjectedValue, sipCurrentRate,
+  investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
 } from './common.js';
 
 let investments = [];
@@ -54,6 +54,10 @@ function renderList() {
     const title = inv.name ? inv.name : inv.type;
     const isSip = inv.investment_mode === 'sip';
     const sipRate = isSip ? sipCurrentRate(inv.sip_history) : 0;
+    const hasReturnHistory = Array.isArray(inv.return_history) && inv.return_history.length > 1;
+    const returnLabel = hasReturnHistory
+      ? `${averageReturn(inv).toFixed(2)}% avg`
+      : `${Number(averageReturn(inv))}%`;
     const metaLine = isSip
       ? `SIP ${fmtMoney(sipRate)}/mo since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`
       : `Since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`;
@@ -68,7 +72,7 @@ function renderList() {
       </div>
       <div class="investment-numbers">
         <span>Invested to date: <strong>${fmtMoney(investedAmount(inv))}</strong></span>
-        <span>Return: <strong>${Number(inv.annual_return)}%</strong>/yr</span>
+        <span>Return: <strong>${returnLabel}</strong>/yr</span>
       </div>
       <div class="investment-meta">${metaLine}</div>
     `;
@@ -130,13 +134,50 @@ function readSipChangeRows() {
   }));
 }
 
+function addReturnChangeRow(date = '', rate = '') {
+  const list = document.getElementById('returnChangesList');
+  const row = document.createElement('div');
+  row.className = 'sip-change-row';
+  row.innerHTML = `
+    <input type="date" class="returnChangeDate" value="${escapeHtml(date)}" />
+    <input type="number" class="returnChangeRate" min="0" step="0.1" placeholder="New annual return %" value="${escapeHtml(String(rate))}" />
+    <button type="button" class="txn-del returnChangeRemove" title="Remove">✕</button>
+  `;
+  row.querySelector('.returnChangeRemove').addEventListener('click', () => { row.remove(); updateReturnAvgHint(); });
+  list.appendChild(row);
+  updateReturnAvgHint();
+}
+
+function clearReturnChangeRows() {
+  document.getElementById('returnChangesList').innerHTML = '';
+}
+
+function readReturnChangeRows() {
+  return Array.from(document.querySelectorAll('#returnChangesList .sip-change-row')).map(row => ({
+    date: row.querySelector('.returnChangeDate').value,
+    rate: parseFloat(row.querySelector('.returnChangeRate').value),
+  }));
+}
+
+function updateReturnAvgHint() {
+  const initial = parseFloat(document.getElementById('iReturn').value);
+  const rows = readReturnChangeRows().filter(r => !isNaN(r.rate));
+  const rates = [...(isNaN(initial) ? [] : [initial]), ...rows.map(r => r.rate)];
+  const hint = document.getElementById('returnAvgHint');
+  if (rates.length > 1) {
+    const avg = rates.reduce((s, r) => s + r, 0) / rates.length;
+    hint.textContent = `Average of ${rates.length} updates: ${avg.toFixed(2)}%/yr — used for projections.`;
+  } else {
+    hint.textContent = '';
+  }
+}
+
 function openModal(inv) {
   editingId = inv ? inv.id : null;
   const isSip = inv && inv.investment_mode === 'sip';
   document.getElementById('investModalTitle').textContent = inv ? 'Edit investment' : 'Add investment';
   document.getElementById('iName').value = inv ? (inv.name || '') : '';
   document.getElementById('iType').value = inv ? inv.type : '';
-  document.getElementById('iReturn').value = inv ? inv.annual_return : '';
   document.getElementById('iDate').value = inv ? inv.start_date : fmtDateISO(new Date());
 
   clearSipChangeRows();
@@ -151,6 +192,12 @@ function openModal(inv) {
     document.getElementById('iSipAmount').value = '';
     document.getElementById('iSipTopup').value = '';
   }
+
+  clearReturnChangeRows();
+  const returnHistory = inv ? [...(inv.return_history || [])].sort((a, b) => a.date.localeCompare(b.date)) : [];
+  document.getElementById('iReturn').value = returnHistory.length ? returnHistory[0].rate : (inv ? inv.annual_return : '');
+  returnHistory.slice(1).forEach(h => addReturnChangeRow(h.date, h.rate));
+  updateReturnAvgHint();
 
   setMode(isSip ? 'sip' : 'lumpsum');
   document.getElementById('investModalOverlay').classList.add('open');
@@ -169,6 +216,20 @@ async function saveInvestment() {
   if (!type) { toast('Enter an investment type'); return; }
   if (isNaN(annualReturn) || annualReturn < 0) { toast('Enter a valid expected return'); return; }
   if (!startDate) { toast('Pick a start date'); return; }
+
+  const returnChangeRows = readReturnChangeRows();
+  for (const row of returnChangeRows) {
+    if (!row.date || isNaN(row.rate) || row.rate < 0) {
+      toast('Each return-rate update needs a date and a valid rate');
+      return;
+    }
+  }
+  const returnHistoryMap = new Map();
+  returnHistoryMap.set(startDate, annualReturn);
+  returnChangeRows.forEach(row => returnHistoryMap.set(row.date, row.rate));
+  const returnHistory = [...returnHistoryMap.entries()]
+    .map(([date, rate]) => ({ date, rate }))
+    .sort((a, b) => a.date.localeCompare(b.date));
 
   let payload;
 
@@ -198,6 +259,7 @@ async function saveInvestment() {
     payload = {
       name: name || null, type, amount: topup, annual_return: annualReturn,
       start_date: sipHistory[0].date, investment_mode: 'sip', sip_history: sipHistory,
+      return_history: returnHistory,
     };
   } else {
     const amount = parseFloat(document.getElementById('iAmount').value);
@@ -205,6 +267,7 @@ async function saveInvestment() {
     payload = {
       name: name || null, type, amount, annual_return: annualReturn,
       start_date: startDate, investment_mode: 'lumpsum', sip_history: null,
+      return_history: returnHistory,
     };
   }
 
@@ -237,6 +300,9 @@ async function init() {
     btn.addEventListener('click', () => setMode(btn.dataset.mode));
   });
   document.getElementById('addSipChangeBtn').addEventListener('click', () => addSipChangeRow());
+  document.getElementById('addReturnChangeBtn').addEventListener('click', () => addReturnChangeRow());
+  document.getElementById('iReturn').addEventListener('input', updateReturnAvgHint);
+  document.getElementById('returnChangesList').addEventListener('input', updateReturnAvgHint);
   document.getElementById('investModalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'investModalOverlay') closeModal();
   });

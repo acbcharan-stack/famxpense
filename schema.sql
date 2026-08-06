@@ -40,6 +40,7 @@ create table if not exists investments (
   start_date date not null default current_date,
   investment_mode text not null default 'lumpsum' check (investment_mode in ('lumpsum', 'sip')),
   sip_history jsonb,
+  return_history jsonb,
   created_at timestamptz not null default now()
 );
 
@@ -47,6 +48,7 @@ alter table investments add column if not exists name text;
 alter table investments alter column amount set default 0;
 alter table investments add column if not exists investment_mode text not null default 'lumpsum';
 alter table investments add column if not exists sip_history jsonb;
+alter table investments add column if not exists return_history jsonb;
 do $$
 begin
   if not exists (

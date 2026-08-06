@@ -123,28 +123,38 @@ export function monthsBetween(startDateStr, asOf = new Date()) {
   return Math.max(0, months);
 }
 
-// Future value of a monthly SIP (annuity due — contribution at the start of each month).
+// Future value of `months` *additional* monthly SIP contributions from today onward (an ordinary
+// annuity — the first of these new contributions lands one month from now). Today's own
+// contribution, if any, belongs to sipInvestedToDate instead and must not be counted here too.
 export function sipFutureValue(monthlyAmount, annualReturnPct, months) {
   const p = Number(monthlyAmount) || 0;
   const n = Math.max(0, Math.round(Number(months) || 0));
   if (p <= 0 || n === 0) return 0;
   const i = (Number(annualReturnPct) || 0) / 100 / 12;
   if (i === 0) return p * n;
-  return p * ((Math.pow(1 + i, n) - 1) / i) * (1 + i);
+  return p * ((Math.pow(1 + i, n) - 1) / i);
 }
 
 // A SIP's rate can change over time: sipHistory is [{ date, amount }, ...] sorted ascending,
 // each entry's amount applying from its date until the next entry's date (or today).
+// SIP contributions land at the *start* of each period (an installment lands on the day the
+// SIP — or a new rate — takes effect, not a month later), so the period currently in effect as
+// of `asOf` counts one more installment (today's) than the whole months elapsed since it began.
 export function sipInvestedToDate(sipHistory, asOf = new Date()) {
   if (!Array.isArray(sipHistory) || sipHistory.length === 0) return 0;
   const sorted = [...sipHistory].sort((a, b) => a.date.localeCompare(b.date));
   let total = 0;
   for (let i = 0; i < sorted.length; i++) {
-    const periodStart = sorted[i].date;
-    if (new Date(periodStart + 'T00:00:00') > asOf) break;
-    const periodEndDate = i + 1 < sorted.length ? new Date(sorted[i + 1].date + 'T00:00:00') : asOf;
-    const months = monthsBetween(periodStart, periodEndDate > asOf ? asOf : periodEndDate);
-    total += (Number(sorted[i].amount) || 0) * months;
+    const periodStartStr = sorted[i].date;
+    const periodStart = new Date(periodStartStr + 'T00:00:00');
+    if (periodStart > asOf) break;
+    const nextEntry = sorted[i + 1];
+    const nextPeriodStart = nextEntry ? new Date(nextEntry.date + 'T00:00:00') : null;
+    const isOpenAsOfToday = !nextPeriodStart || nextPeriodStart > asOf;
+    const installments = isOpenAsOfToday
+      ? monthsBetween(periodStartStr, asOf) + 1
+      : monthsBetween(periodStartStr, nextPeriodStart);
+    total += (Number(sorted[i].amount) || 0) * installments;
   }
   return total;
 }
@@ -165,12 +175,26 @@ export function investedAmount(inv) {
   return Number(inv.amount) || 0;
 }
 
-// Projected value `years` from now: existing corpus grows at the expected return, and — for
-// SIPs — contributions keep going at the current monthly rate for the projection horizon.
+// An investment's expected return can be revised over time (e.g. rechecked monthly against
+// actual performance): returnHistory is [{ date, rate }, ...]. Projections use the plain
+// average of every recorded rate rather than just the latest one. Falls back to the flat
+// annual_return column when no history has been recorded.
+export function averageReturn(inv) {
+  const history = inv.return_history;
+  if (Array.isArray(history) && history.length > 0) {
+    const sum = history.reduce((s, h) => s + (Number(h.rate) || 0), 0);
+    return sum / history.length;
+  }
+  return Number(inv.annual_return) || 0;
+}
+
+// Projected value `years` from now: existing corpus grows at the (average) expected return, and
+// — for SIPs — contributions keep going at the current monthly rate for the projection horizon.
 export function investmentProjectedValue(inv, years) {
-  const grown = projectedValue(investedAmount(inv), inv.annual_return, years);
+  const rate = averageReturn(inv);
+  const grown = projectedValue(investedAmount(inv), rate, years);
   if (inv.investment_mode === 'sip') {
-    const futureContributions = sipFutureValue(sipCurrentRate(inv.sip_history), inv.annual_return, (Number(years) || 0) * 12);
+    const futureContributions = sipFutureValue(sipCurrentRate(inv.sip_history), rate, (Number(years) || 0) * 12);
     return grown + futureContributions;
   }
   return grown;
