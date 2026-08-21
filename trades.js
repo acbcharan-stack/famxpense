@@ -1,7 +1,7 @@
 import {
   sb, setupAuth, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
-  tradeStatusInfo, tradesSummary,
+  tradeStatusInfo, tradesSummary, netExitAmount,
 } from './common.js';
 
 let trades = [];
@@ -85,7 +85,8 @@ function renderList() {
         <span>Exited: <strong>${fmtMoney(t.exit_amount)}</strong></span>
         <span>Gain: <strong class="${gainClass}">${info.amount >= 0 ? '+' : ''}${fmtMoney(info.amount)} (${info.percent.toFixed(2)}%)</strong></span>`;
       const exitDateStr = t.exit_date ? new Date(t.exit_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
-      metaLine = `Invested ${dateStr} · Exited ${exitDateStr} (target was ${t.target_percent}% by ${targetDateStr})`;
+      const loadStr = t.exit_load_percent != null ? ` · Exit load ${t.exit_load_percent}%` : '';
+      metaLine = `Invested ${dateStr} · Exited ${exitDateStr} (target was ${t.target_percent}% by ${targetDateStr})${loadStr}`;
     } else {
       const overdue = info.overdue;
       badge = overdue
@@ -157,10 +158,14 @@ function updateExitGainHint() {
   }
   const invested = parseFloat(document.getElementById('tInvested').value);
   const exitAmount = parseFloat(document.getElementById('tExitAmount').value);
-  if (!isNaN(invested) && invested > 0 && !isNaN(exitAmount)) {
-    const gain = exitAmount - invested;
+  const exitLoadRaw = document.getElementById('tExitLoad').value;
+  const exitLoadPercent = exitLoadRaw === '' ? 0 : parseFloat(exitLoadRaw);
+  if (!isNaN(invested) && invested > 0 && !isNaN(exitAmount) && !isNaN(exitLoadPercent)) {
+    const net = netExitAmount({ exit_amount: exitAmount, exit_load_percent: exitLoadPercent });
+    const gain = net - invested;
     const pct = (gain / invested) * 100;
-    hint.textContent = `${gain >= 0 ? '+' : ''}${fmtMoney(gain)} (${pct.toFixed(2)}%) vs. amount invested.`;
+    const loadNote = exitLoadPercent > 0 ? ` after ${exitLoadPercent}% exit load (net ${fmtMoney(net)})` : '';
+    hint.textContent = `${gain >= 0 ? '+' : ''}${fmtMoney(gain)} (${pct.toFixed(2)}%) vs. amount invested${loadNote}.`;
   } else {
     hint.textContent = '';
   }
@@ -187,6 +192,7 @@ function openModal(t) {
   document.getElementById('tExitDate').value = isClosed ? t.exit_date : fmtDateISO(new Date());
   document.getElementById('tExitPrice').value = isClosed && t.exit_price != null ? t.exit_price : '';
   document.getElementById('tExitAmount').value = isClosed && t.exit_amount != null ? t.exit_amount : '';
+  document.getElementById('tExitLoad').value = isClosed && t.exit_load_percent != null ? t.exit_load_percent : '';
   document.getElementById('exitGainHint').textContent = '';
 
   document.getElementById('tradeModalOverlay').classList.add('open');
@@ -215,14 +221,20 @@ async function saveTrade() {
   if (isNaN(targetPercent) || targetPercent < 0) { toast('Enter a valid target percentage'); return; }
 
   const isExited = document.getElementById('tExitToggle').checked;
-  let exitDate = null, exitAmount = null, exitPrice = null;
+  let exitDate = null, exitAmount = null, exitPrice = null, exitLoadPercent = null;
   if (isExited) {
     exitDate = document.getElementById('tExitDate').value;
     exitAmount = parseFloat(document.getElementById('tExitAmount').value);
     const exitPriceRaw = document.getElementById('tExitPrice').value;
     exitPrice = exitPriceRaw === '' ? null : parseFloat(exitPriceRaw);
+    const exitLoadRaw = document.getElementById('tExitLoad').value;
+    exitLoadPercent = exitLoadRaw === '' ? null : parseFloat(exitLoadRaw);
     if (!exitDate) { toast('Pick the exit date'); return; }
     if (isNaN(exitAmount) || exitAmount < 0) { toast('Enter a valid exit amount'); return; }
+    if (exitLoadPercent != null && (isNaN(exitLoadPercent) || exitLoadPercent < 0)) {
+      toast('Enter a valid exit load percentage, or leave it blank');
+      return;
+    }
   }
 
   const payload = {
@@ -240,6 +252,7 @@ async function saveTrade() {
     exit_date: exitDate,
     exit_amount: exitAmount,
     exit_price: exitPrice,
+    exit_load_percent: exitLoadPercent,
   };
 
   const { error } = editingId
@@ -278,6 +291,7 @@ async function init() {
   document.getElementById('tInvested').addEventListener('input', updateExitGainHint);
   document.getElementById('tExitPrice').addEventListener('input', updateExitGainHint);
   document.getElementById('tExitAmount').addEventListener('input', updateExitGainHint);
+  document.getElementById('tExitLoad').addEventListener('input', updateExitGainHint);
   document.getElementById('exitToggleRow').addEventListener('click', (e) => {
     if (e.target.id === 'tExitToggle') return;
     setExitVisible(!document.getElementById('tExitToggle').checked);

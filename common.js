@@ -81,6 +81,32 @@ export function fmtMoney(n) {
   return (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
+// Countries a foreign investment can be tagged with. Each entry's symbol is used only to
+// *display* that investment's own amounts — there is no live exchange-rate conversion, so
+// aggregate totals across investments in different currencies are a naive sum, not a real one.
+export const COUNTRY_CURRENCIES = [
+  { country: 'India', symbol: '₹', locale: 'en-IN' },
+  { country: 'United States', symbol: '$', locale: 'en-US' },
+  { country: 'United Kingdom', symbol: '£', locale: 'en-GB' },
+  { country: 'Canada', symbol: 'C$', locale: 'en-CA' },
+  { country: 'Australia', symbol: 'A$', locale: 'en-AU' },
+  { country: 'Singapore', symbol: 'S$', locale: 'en-SG' },
+  { country: 'United Arab Emirates', symbol: 'AED ', locale: 'en-AE' },
+  { country: 'Germany', symbol: '€', locale: 'de-DE' },
+  { country: 'Japan', symbol: '¥', locale: 'ja-JP' },
+  { country: 'Switzerland', symbol: 'CHF ', locale: 'de-CH' },
+];
+
+export function currencyForCountry(country) {
+  return COUNTRY_CURRENCIES.find(c => c.country === country) || COUNTRY_CURRENCIES[0];
+}
+
+export function fmtMoneyCountry(n, country) {
+  const v = Number(n) || 0;
+  const cur = currencyForCountry(country);
+  return (v < 0 ? '-' : '') + cur.symbol + Math.abs(v).toLocaleString(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
 export function hexToRgba(hex, alpha) {
   const h = (hex || '#2a78d6').replace('#', '');
   const r = parseInt(h.substring(0, 2), 16), g = parseInt(h.substring(2, 4), 16), b = parseInt(h.substring(4, 6), 16);
@@ -291,11 +317,18 @@ export function daysUntil(date, asOf = new Date()) {
   return Math.round((b - a) / 86400000);
 }
 
-// Realized gain for a closed trade, in money and in percent of the amount invested.
+// Money actually kept from an exit after the broker/AMC's exit load (a % fee on the
+// redemption value) is deducted. Absent for trades with no exit load recorded.
+export function netExitAmount(trade) {
+  const exit = Number(trade.exit_amount) || 0;
+  const loadPct = Number(trade.exit_load_percent) || 0;
+  return exit - (exit * loadPct / 100);
+}
+
+// Realized gain for a closed trade, net of exit load, in money and in percent of the amount invested.
 export function tradeGain(trade) {
   const invested = Number(trade.invested_amount) || 0;
-  const exit = Number(trade.exit_amount) || 0;
-  const amount = exit - invested;
+  const amount = netExitAmount(trade) - invested;
   const percent = invested > 0 ? (amount / invested) * 100 : 0;
   return { amount, percent };
 }

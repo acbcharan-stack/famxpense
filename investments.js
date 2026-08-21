@@ -1,5 +1,5 @@
 import {
-  sb, setupAuth, toast, fmtMoney, escapeHtml, fmtDateISO,
+  sb, setupAuth, toast, fmtMoney, fmtMoneyCountry, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
@@ -84,21 +84,24 @@ function renderList() {
       ? `${averageReturn(inv).toFixed(2)}% avg`
       : `${Number(averageReturn(inv))}%`;
     const owner = profiles.find(p => p.id === inv.profile_id);
+    const country = inv.country || 'India';
     const metaLine = isSip
-      ? `SIP ${fmtMoney(sipRate)}/mo since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`
-      : `Since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`;
+      ? `SIP ${fmtMoneyCountry(sipRate, country)}/mo since ${dateStr} · Projected in 10y: ${fmtMoneyCountry(investmentProjectedValue(inv, 10), country)}`
+      : `Since ${dateStr} · Projected in 10y: ${fmtMoneyCountry(investmentProjectedValue(inv, 10), country)}`;
     card.innerHTML = `
       <div class="investment-head">
         <div class="investment-type">
           ${escapeHtml(title)}
           ${inv.name ? `<span class="investment-subtype">${escapeHtml(inv.type)}</span>` : ''}
           ${isSip ? `<span class="investment-subtype">SIP</span>` : ''}
+          ${country !== 'India' ? `<span class="investment-subtype">${escapeHtml(country)}</span>` : ''}
+          ${inv.exit_load_percent != null ? `<span class="investment-subtype">Exit load ${inv.exit_load_percent}%</span>` : ''}
           <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
         </div>
         <button class="txn-del" title="Delete">🗑️</button>
       </div>
       <div class="investment-numbers">
-        <span>Invested to date: <strong>${fmtMoney(investedAmount(inv))}</strong></span>
+        <span>Invested to date: <strong>${fmtMoneyCountry(investedAmount(inv), country)}</strong></span>
         <span>Return: <strong>${returnLabel}</strong>/yr</span>
       </div>
       <div class="investment-meta">${metaLine}</div>
@@ -208,6 +211,8 @@ function openModal(inv) {
   document.getElementById('iName').value = inv ? (inv.name || '') : '';
   document.getElementById('iType').value = inv ? inv.type : '';
   document.getElementById('iDate').value = inv ? inv.start_date : fmtDateISO(new Date());
+  document.getElementById('iCountry').value = inv ? (inv.country || 'India') : 'India';
+  document.getElementById('iExitLoad').value = inv && inv.exit_load_percent != null ? inv.exit_load_percent : '';
 
   clearSipChangeRows();
   if (isSip) {
@@ -246,6 +251,14 @@ async function saveInvestment() {
   if (!type) { toast('Enter an investment type'); return; }
   if (isNaN(annualReturn) || annualReturn < 0) { toast('Enter a valid expected return'); return; }
   if (!startDate) { toast('Pick a start date'); return; }
+
+  const country = document.getElementById('iCountry').value;
+  const exitLoadRaw = document.getElementById('iExitLoad').value;
+  const exitLoadPercent = exitLoadRaw === '' ? null : parseFloat(exitLoadRaw);
+  if (exitLoadPercent != null && (isNaN(exitLoadPercent) || exitLoadPercent < 0)) {
+    toast('Enter a valid exit load percentage, or leave it blank');
+    return;
+  }
 
   const returnChangeRows = readReturnChangeRows();
   for (const row of returnChangeRows) {
@@ -290,7 +303,7 @@ async function saveInvestment() {
       profile_id: selectedProfileId,
       name: name || null, type, amount: topup, annual_return: annualReturn,
       start_date: sipHistory[0].date, investment_mode: 'sip', sip_history: sipHistory,
-      return_history: returnHistory,
+      return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
     };
   } else {
     const amount = parseFloat(document.getElementById('iAmount').value);
@@ -299,7 +312,7 @@ async function saveInvestment() {
       profile_id: selectedProfileId,
       name: name || null, type, amount, annual_return: annualReturn,
       start_date: startDate, investment_mode: 'lumpsum', sip_history: null,
-      return_history: returnHistory,
+      return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
     };
   }
 

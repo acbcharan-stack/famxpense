@@ -54,6 +54,8 @@ alter table investments add column if not exists profile_id uuid references prof
 alter table investments drop constraint if exists investments_investment_mode_check;
 alter table investments add constraint investments_investment_mode_check
   check (investment_mode in ('lumpsum', 'sip'));
+alter table investments add column if not exists country text not null default 'India';
+alter table investments add column if not exists exit_load_percent numeric(5,2);
 
 create table if not exists trades (
   id uuid primary key default gen_random_uuid(),
@@ -77,6 +79,7 @@ create table if not exists trades (
 
 alter table trades add column if not exists notified_at timestamptz;
 alter table trades add column if not exists profile_id uuid references profiles(id) on delete set null;
+alter table trades add column if not exists exit_load_percent numeric(5,2);
 
 create table if not exists goals (
   id uuid primary key default gen_random_uuid(),
