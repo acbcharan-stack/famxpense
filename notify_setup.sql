@@ -1,6 +1,6 @@
 -- Run this once in the Supabase SQL Editor AFTER you have:
 --   1. Deployed the `notify` Edge Function (supabase functions deploy notify --no-verify-jwt)
---   2. Set its secrets (RESEND_API_KEY, FROM_EMAIL, NOTIFY_EMAIL, CRON_SECRET)
+--   2. Set its secrets (MAILGUN_API_KEY, MAILGUN_DOMAIN, NOTIFY_EMAILS, CRON_SECRET)
 -- See the deployment commands shared alongside this file for the exact CLI steps.
 
 create extension if not exists pg_cron with schema extensions;

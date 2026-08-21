@@ -1,4 +1,4 @@
-// Sends trade/investment notification emails via Resend. Triggered by pg_cron (see
+// Sends trade/investment notification emails via Mailgun. Triggered by pg_cron (see
 // notify_setup.sql), never called directly by the frontend.
 //
 // POST body: { "type": "expiry" | "monthly" }
@@ -8,13 +8,19 @@
 //
 // Auth: a shared secret in the `x-cron-secret` header (not a Supabase JWT — this function
 // is deployed with --no-verify-jwt since only pg_cron calls it).
+//
+// Mailgun sandbox domains only deliver to addresses added as "Authorized Recipients" in
+// the Mailgun dashboard (each must accept a one-time confirmation email).
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const RESEND_API_KEY = Deno.env.get("RESEND_API_KEY")!;
-const FROM_EMAIL = Deno.env.get("FROM_EMAIL")!;
-const NOTIFY_EMAIL = Deno.env.get("NOTIFY_EMAIL")!;
+const MAILGUN_API_KEY = Deno.env.get("MAILGUN_API_KEY")!;
+const MAILGUN_DOMAIN = Deno.env.get("MAILGUN_DOMAIN")!;
+const NOTIFY_EMAILS = Deno.env.get("NOTIFY_EMAILS")!
+  .split(",")
+  .map((e) => e.trim())
+  .filter(Boolean);
 const CRON_SECRET = Deno.env.get("CRON_SECRET")!;
 
 const sb = createClient(
@@ -50,16 +56,22 @@ function tradeGain(t: any) {
 }
 
 async function sendEmail(subject: string, html: string) {
-  const res = await fetch("https://api.resend.com/emails", {
+  const form = new URLSearchParams();
+  form.set("from", `Family Expense Tracker <mailgun@${MAILGUN_DOMAIN}>`);
+  for (const to of NOTIFY_EMAILS) form.append("to", to);
+  form.set("subject", subject);
+  form.set("html", html);
+
+  const res = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${RESEND_API_KEY}`,
-      "Content-Type": "application/json",
+      Authorization: `Basic ${btoa(`api:${MAILGUN_API_KEY}`)}`,
+      "Content-Type": "application/x-www-form-urlencoded",
     },
-    body: JSON.stringify({ from: FROM_EMAIL, to: [NOTIFY_EMAIL], subject, html }),
+    body: form,
   });
   if (!res.ok) {
-    console.error("Resend send failed:", res.status, await res.text());
+    console.error("Mailgun send failed:", res.status, await res.text());
   }
 }
 
