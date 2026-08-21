@@ -1,18 +1,43 @@
 import {
-  sb, setupLock, toast, fmtMoney, escapeHtml, fmtDateISO,
+  sb, setupAuth, signOut, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
 } from './common.js';
 
 let investments = [];
+let profiles = [];
 let editingId = null;
 let currentMode = 'lumpsum';
+let selectedProfileId = null;
 
 async function loadInvestments() {
   const { data, error } = await sb.from('investments').select('*').order('created_at', { ascending: false });
   if (error) { toast('Error loading investments: ' + error.message); throw error; }
   investments = data || [];
+}
+
+async function loadProfiles() {
+  const { data, error } = await sb.from('profiles').select('*').order('sort_order', { ascending: true });
+  if (error) { toast('Error loading profiles: ' + error.message); throw error; }
+  profiles = data || [];
+}
+
+function renderProfilePicker() {
+  const picker = document.getElementById('investProfilePicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedProfileId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => {
+      selectedProfileId = p.id;
+      renderProfilePicker();
+    });
+    picker.appendChild(btn);
+  });
 }
 
 function renderDashboard() {
@@ -58,6 +83,7 @@ function renderList() {
     const returnLabel = hasReturnHistory
       ? `${averageReturn(inv).toFixed(2)}% avg`
       : `${Number(averageReturn(inv))}%`;
+    const owner = profiles.find(p => p.id === inv.profile_id);
     const metaLine = isSip
       ? `SIP ${fmtMoney(sipRate)}/mo since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`
       : `Since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`;
@@ -67,6 +93,7 @@ function renderList() {
           ${escapeHtml(title)}
           ${inv.name ? `<span class="investment-subtype">${escapeHtml(inv.type)}</span>` : ''}
           ${isSip ? `<span class="investment-subtype">SIP</span>` : ''}
+          <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
         </div>
         <button class="txn-del" title="Delete">🗑️</button>
       </div>
@@ -175,6 +202,8 @@ function updateReturnAvgHint() {
 function openModal(inv) {
   editingId = inv ? inv.id : null;
   const isSip = inv && inv.investment_mode === 'sip';
+  selectedProfileId = inv ? (inv.profile_id || null) : (profiles[0]?.id || null);
+  renderProfilePicker();
   document.getElementById('investModalTitle').textContent = inv ? 'Edit investment' : 'Add investment';
   document.getElementById('iName').value = inv ? (inv.name || '') : '';
   document.getElementById('iType').value = inv ? inv.type : '';
@@ -213,6 +242,7 @@ async function saveInvestment() {
   const annualReturn = parseFloat(document.getElementById('iReturn').value);
   const startDate = document.getElementById('iDate').value;
 
+  if (!selectedProfileId) { toast('Pick a profile'); return; }
   if (!type) { toast('Enter an investment type'); return; }
   if (isNaN(annualReturn) || annualReturn < 0) { toast('Enter a valid expected return'); return; }
   if (!startDate) { toast('Pick a start date'); return; }
@@ -257,6 +287,7 @@ async function saveInvestment() {
       .sort((a, b) => a.date.localeCompare(b.date));
 
     payload = {
+      profile_id: selectedProfileId,
       name: name || null, type, amount: topup, annual_return: annualReturn,
       start_date: sipHistory[0].date, investment_mode: 'sip', sip_history: sipHistory,
       return_history: returnHistory,
@@ -265,6 +296,7 @@ async function saveInvestment() {
     const amount = parseFloat(document.getElementById('iAmount').value);
     if (isNaN(amount) || amount <= 0) { toast('Enter a valid amount'); return; }
     payload = {
+      profile_id: selectedProfileId,
       name: name || null, type, amount, annual_return: annualReturn,
       start_date: startDate, investment_mode: 'lumpsum', sip_history: null,
       return_history: returnHistory,
@@ -291,7 +323,8 @@ function renderAll() {
 async function init() {
   applyStoredTheme();
   initSidebar('investments');
-  await setupLock();
+  await setupAuth();
+  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
   document.getElementById('fabAdd').addEventListener('click', () => openModal(null));
@@ -311,7 +344,7 @@ async function init() {
   document.getElementById('investCustomYears').addEventListener('input', updateCustomProjection);
 
   try {
-    await loadInvestments();
+    await Promise.all([loadInvestments(), loadProfiles()]);
   } catch {
     document.querySelector('.app').innerHTML = `
       <div class="empty-note" style="padding:60px 20px; text-align:center;">

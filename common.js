@@ -5,44 +5,50 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const PASSCODE_HASH = '0a95adbf8581859ae0cc477127abeaf4ad89916405c41855af8fbc482e1634e8';
-const UNLOCK_KEY = 'famExpenseUnlocked';
+// Google Sign-In gates the UI; RLS policies in schema.sql (is_family_member()) gate the
+// data itself using this same list, so keep the two in sync.
+export const ALLOWED_EMAILS = [
+  'acb.charan@gmail.com',
+  'acboopathy@gmail.com',
+  'namca2000@gmail.com',
+  'sudanboopathy72@gmail.com',
+];
 
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-export function setupLock() {
-  const overlay = document.getElementById('lockOverlay');
-  const input = document.getElementById('lockInput');
-  const error = document.getElementById('lockError');
-  const submitBtn = document.getElementById('lockSubmit');
-
-  if (localStorage.getItem(UNLOCK_KEY) === '1') {
-    overlay.classList.add('hidden');
-    return Promise.resolve();
-  }
+export function setupAuth() {
+  const overlay = document.getElementById('authOverlay');
+  const signInBtn = document.getElementById('googleSignInBtn');
+  const errorEl = document.getElementById('authError');
 
   return new Promise((resolve) => {
-    const tryUnlock = async () => {
-      const val = input.value.trim();
-      if (!val) return;
-      const hash = await sha256Hex(val);
-      if (hash === PASSCODE_HASH) {
-        localStorage.setItem(UNLOCK_KEY, '1');
+    let resolved = false;
+
+    const handleSession = async (session) => {
+      if (session && ALLOWED_EMAILS.includes(session.user.email)) {
         overlay.classList.add('hidden');
-        resolve();
+        if (!resolved) { resolved = true; resolve(); }
+      } else if (session) {
+        const deniedEmail = session.user.email;
+        await sb.auth.signOut();
+        if (errorEl) errorEl.textContent = `${deniedEmail} isn't on the family list.`;
+        overlay.classList.remove('hidden');
       } else {
-        error.textContent = 'Incorrect passcode. Try again.';
-        input.value = '';
-        input.focus();
+        overlay.classList.remove('hidden');
       }
     };
-    submitBtn.addEventListener('click', tryUnlock);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-    input.focus();
+
+    sb.auth.onAuthStateChange((_event, session) => { handleSession(session); });
+    sb.auth.getSession().then(({ data }) => handleSession(data.session));
+
+    signInBtn?.addEventListener('click', () => {
+      if (errorEl) errorEl.textContent = '';
+      sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } });
+    });
   });
+}
+
+export async function signOut() {
+  await sb.auth.signOut();
+  window.location.reload();
 }
 
 // ---------- date / money helpers ----------
@@ -303,6 +309,25 @@ export function sumTradesInvested(trades) {
 }
 
 // Realized P&L across every closed trade, plus a win rate (share that hit their target %).
+// ---------- goals ----------
+
+// Cumulative (budget - spent) since a goal's creation, one month at a time. Months with no
+// budget row for the profile contribute nothing (no leftover to speak of, not a deficit).
+export function goalProgress(goalCreatedAt, budgetsForProfile, expensesForProfile) {
+  const startMonth = startOfMonth(new Date(goalCreatedAt));
+  let surplus = 0;
+  budgetsForProfile.forEach(b => {
+    const monthStart = new Date(b.month + 'T00:00:00');
+    if (monthStart < startMonth) return;
+    const monthEndISO = fmtDateISO(addMonths(monthStart, 1));
+    const spent = expensesForProfile
+      .filter(e => e.expense_date >= b.month && e.expense_date < monthEndISO)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    surplus += Number(b.amount) - spent;
+  });
+  return surplus;
+}
+
 export function tradesSummary(trades) {
   const closed = trades.filter(t => t.status === 'closed');
   const investedClosed = sumTradesInvested(closed);

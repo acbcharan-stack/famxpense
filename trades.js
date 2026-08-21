@@ -1,16 +1,41 @@
 import {
-  sb, setupLock, toast, fmtMoney, escapeHtml, fmtDateISO,
+  sb, setupAuth, signOut, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   tradeStatusInfo, tradesSummary,
 } from './common.js';
 
 let trades = [];
+let profiles = [];
 let editingId = null;
+let selectedProfileId = null;
 
 async function loadTrades() {
   const { data, error } = await sb.from('trades').select('*').order('trade_date', { ascending: false });
   if (error) { toast('Error loading trades: ' + error.message); throw error; }
   trades = data || [];
+}
+
+async function loadProfiles() {
+  const { data, error } = await sb.from('profiles').select('*').order('sort_order', { ascending: true });
+  if (error) { toast('Error loading profiles: ' + error.message); throw error; }
+  profiles = data || [];
+}
+
+function renderProfilePicker() {
+  const picker = document.getElementById('tradeProfilePicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedProfileId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => {
+      selectedProfileId = p.id;
+      renderProfilePicker();
+    });
+    picker.appendChild(btn);
+  });
 }
 
 function renderSummary() {
@@ -45,6 +70,7 @@ function renderList() {
   trades.forEach(t => {
     const info = tradeStatusInfo(t);
     const card = document.createElement('div');
+    const owner = profiles.find(p => p.id === t.profile_id);
     const dateStr = new Date(t.trade_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
     const targetDateStr = info.targetDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
@@ -75,7 +101,7 @@ function renderList() {
     card.className = `trade-card ${cardClass}`;
     card.innerHTML = `
       <div class="trade-head">
-        <div class="trade-symbol">${escapeHtml(t.symbol)}</div>
+        <div class="trade-symbol">${escapeHtml(t.symbol)} <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span></div>
         <div style="display:flex; align-items:center; gap:8px;">
           ${badge}
           <button class="txn-del" title="Delete">🗑️</button>
@@ -142,6 +168,8 @@ function updateExitGainHint() {
 
 function openModal(t) {
   editingId = t ? t.id : null;
+  selectedProfileId = t ? (t.profile_id || null) : (profiles[0]?.id || null);
+  renderProfilePicker();
   document.getElementById('tradeModalTitle').textContent = t ? 'Edit trade' : 'Add trade';
   document.getElementById('tSymbol').value = t ? t.symbol : '';
   document.getElementById('tQuantity').value = t && t.quantity != null ? t.quantity : '';
@@ -179,6 +207,7 @@ async function saveTrade() {
   const targetPercent = parseFloat(document.getElementById('tTargetPercent').value);
   const notes = document.getElementById('tNotes').value.trim();
 
+  if (!selectedProfileId) { toast('Pick a profile'); return; }
   if (!symbol) { toast('Enter a stock/trade name'); return; }
   if (isNaN(invested) || invested <= 0) { toast('Enter a valid amount invested'); return; }
   if (!tradeDate) { toast('Pick the date of investment'); return; }
@@ -197,6 +226,7 @@ async function saveTrade() {
   }
 
   const payload = {
+    profile_id: selectedProfileId,
     symbol,
     quantity: quantityRaw === '' ? null : parseFloat(quantityRaw),
     entry_price: entryPriceRaw === '' ? null : parseFloat(entryPriceRaw),
@@ -232,7 +262,8 @@ function renderAll() {
 async function init() {
   applyStoredTheme();
   initSidebar('trades');
-  await setupLock();
+  await setupAuth();
+  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
   document.getElementById('fabAdd').addEventListener('click', () => openModal(null));
@@ -255,7 +286,7 @@ async function init() {
   document.getElementById('tExitToggle').addEventListener('change', (e) => setExitVisible(e.target.checked));
 
   try {
-    await loadTrades();
+    await Promise.all([loadTrades(), loadProfiles()]);
   } catch {
     document.querySelector('.app').innerHTML = `
       <div class="empty-note" style="padding:60px 20px; text-align:center;">
