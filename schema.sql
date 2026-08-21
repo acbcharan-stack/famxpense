@@ -49,15 +49,9 @@ alter table investments alter column amount set default 0;
 alter table investments add column if not exists investment_mode text not null default 'lumpsum';
 alter table investments add column if not exists sip_history jsonb;
 alter table investments add column if not exists return_history jsonb;
-do $$
-begin
-  if not exists (
-    select 1 from pg_constraint where conname = 'investments_investment_mode_check'
-  ) then
-    alter table investments add constraint investments_investment_mode_check
-      check (investment_mode in ('lumpsum', 'sip'));
-  end if;
-end $$;
+alter table investments drop constraint if exists investments_investment_mode_check;
+alter table investments add constraint investments_investment_mode_check
+  check (investment_mode in ('lumpsum', 'sip'));
 
 create table if not exists trades (
   id uuid primary key default gen_random_uuid(),

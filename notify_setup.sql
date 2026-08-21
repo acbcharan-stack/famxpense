@@ -16,17 +16,8 @@ select vault.create_secret(
 );
 
 -- Re-runnable: drop any existing schedule with the same name before recreating it.
-do $$
-begin
-  perform cron.unschedule('trade-expiry-daily');
-exception when others then null;
-end $$;
-
-do $$
-begin
-  perform cron.unschedule('trade-monthly-digest');
-exception when others then null;
-end $$;
+select cron.unschedule(jobid) from cron.job where jobname = 'trade-expiry-daily';
+select cron.unschedule(jobid) from cron.job where jobname = 'trade-monthly-digest';
 
 -- Daily: alert on any open trade whose target date has passed and hasn't been notified yet.
 select cron.schedule(
