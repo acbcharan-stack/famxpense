@@ -2,7 +2,7 @@ import * as XLSX from 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm';
 import {
   sb, setupLock, toast, fmtMoney, hexToRgba, escapeHtml,
   pad, fmtDateISO, startOfMonth, addMonths,
-  applyStoredTheme, toggleTheme,
+  applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
 } from './common.js';
 
@@ -659,6 +659,7 @@ async function saveExpense() {
 
 async function init() {
   applyStoredTheme();
+  initSidebar('expenses');
   await setupLock();
 
   CATEGORIES.forEach(c => {

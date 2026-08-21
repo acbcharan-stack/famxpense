@@ -81,6 +81,100 @@ body {
   padding: 16px 16px 96px;
 }
 
+/* ---------- layout / sidebar nav ---------- */
+
+.layout {
+  display: flex;
+  align-items: stretch;
+  min-height: 100vh;
+}
+
+.main-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.sidebar {
+  width: 224px;
+  flex-shrink: 0;
+  background: var(--surface-1);
+  border-right: 1px solid var(--border);
+  padding: 20px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow-y: auto;
+}
+
+.sidebar-brand {
+  font-weight: 800;
+  font-size: 1.05rem;
+  padding: 6px 12px 22px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.nav-link {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.nav-link:hover { background: var(--gridline); }
+.nav-link.active {
+  background: var(--text-primary);
+  color: var(--page-plane);
+}
+
+.nav-emoji { font-size: 1.1rem; }
+
+.menu-toggle { display: none; }
+
+.sidebar-overlay {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidebar {
+    position: fixed;
+    left: 0;
+    top: 0;
+    height: 100vh;
+    width: 240px;
+    transform: translateX(-100%);
+    transition: transform 0.2s ease;
+    z-index: 60;
+    box-shadow: 0 0 24px rgba(0,0,0,0.25);
+  }
+  .sidebar.open { transform: translateX(0); }
+
+  .sidebar-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    z-index: 55;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.2s ease;
+  }
+  .sidebar-overlay.open { display: block; opacity: 1; pointer-events: auto; }
+
+  .menu-toggle { display: flex; }
+}
+
 /* ---------- header ---------- */
 
 .topbar {
@@ -96,6 +190,12 @@ body {
   font-size: 1.35rem;
   margin: 0;
   font-weight: 700;
+}
+
+.topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .month-nav {
@@ -158,6 +258,7 @@ body {
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 16px 18px;
+  min-width: 0; /* grid items default to min-width:auto, which blocks shrinking below content width */
 }
 
 .stat-tile .label {
@@ -167,9 +268,11 @@ body {
 }
 
 .stat-tile .value {
-  font-size: 1.7rem;
+  font-size: clamp(1.15rem, 5.5vw, 1.7rem);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
+  overflow-wrap: break-word;
+  word-break: break-word;
 }
 
 .stat-tile .value.critical { color: var(--status-critical); }
@@ -682,6 +785,12 @@ table.data-table td.num, table.data-table th.num {
   font: inherit;
 }
 
+.field-hint {
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 6px;
+}
+
 .profile-picker {
   display: flex;
   gap: 8px;
@@ -894,6 +1003,109 @@ table.data-table td.num, table.data-table th.num {
   color: var(--muted);
 }
 
+.sip-change-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.sip-change-row input[type="date"] { flex: 1 1 140px; min-width: 0; }
+.sip-change-row input[type="number"] { flex: 1 1 120px; min-width: 0; }
+.sip-change-row .sipChangeRemove {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.9rem;
+}
+
+#investModeTabs { width: 100%; }
+#investModeTabs .tab { flex: 1; text-align: center; }
+
+.btn-sm { padding: 8px 12px; font-size: 0.8rem; }
+
+/* ---------- trades ---------- */
+
+.trade-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.trade-card {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 14px 16px;
+  cursor: pointer;
+  border-left: 3px solid var(--series-1);
+  transition: box-shadow 0.12s ease;
+}
+.trade-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+.trade-card.closed-win { border-left-color: var(--status-good); }
+.trade-card.closed-loss { border-left-color: var(--status-critical); }
+.trade-card.overdue { border-left-color: var(--status-warning); }
+
+.trade-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.trade-symbol { font-weight: 700; font-size: 1rem; }
+
+.trade-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 3px 9px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.trade-badge.open { color: var(--series-1); background: rgba(42,120,214,0.12); }
+.trade-badge.overdue { color: #8a6100; background: var(--status-warning-bg); }
+.trade-badge.win { color: var(--status-good); background: var(--status-good-bg); }
+.trade-badge.loss { color: var(--status-critical); background: var(--status-critical-bg); }
+@media (prefers-color-scheme: dark) {
+  html:where(:not([data-theme="light"])) .trade-badge.overdue { color: #ffd27a; }
+}
+html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
+
+.trade-numbers {
+  display: flex;
+  gap: 16px;
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  flex-wrap: wrap;
+  margin-bottom: 4px;
+}
+.trade-numbers strong { color: var(--text-primary); }
+.trade-numbers strong.good { color: var(--status-good); }
+.trade-numbers strong.critical { color: var(--status-critical); }
+
+.trade-meta {
+  font-size: 0.78rem;
+  color: var(--muted);
+}
+
+.exit-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  margin-bottom: 14px;
+  cursor: pointer;
+}
+.exit-toggle-row input { width: auto; }
+.exit-toggle-row label { margin: 0; cursor: pointer; }
+
 @media (max-width: 480px) {
   .topbar h1 { font-size: 1.15rem; }
   .bar-row { grid-template-columns: 84px 1fr 56px; }
@@ -901,4 +1113,11 @@ table.data-table td.num, table.data-table th.num {
   .trend-value { font-size: 0.62rem; }
   .trend-month { font-size: 0.68rem; }
   .invest-custom-row strong { margin-left: 0; width: 100%; }
+  .stat-row { grid-template-columns: 1fr; }
+  .stat-tile .value { font-size: 1.5rem; }
+  .modal { padding: 16px; border-radius: 14px; }
+  .sip-change-row input[type="date"] { flex-basis: 100%; }
+  #addSipChangeBtn { width: 100%; }
+  .investment-numbers { gap: 10px 16px; }
+  .trade-numbers { gap: 10px 16px; }
 }

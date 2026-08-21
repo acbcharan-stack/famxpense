@@ -8,10 +8,17 @@
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <div class="main-content">
 <div class="app">
 
   <div class="topbar">
-    <h1>💸 Family Expense Tracker</h1>
+    <div class="topbar-left">
+      <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
+      <h1>💸 Family Expense Tracker</h1>
+    </div>
     <div style="display:flex; align-items:center; gap:10px;">
       <div class="month-nav">
         <button id="prevMonth" aria-label="Previous month">‹</button>
@@ -92,6 +99,8 @@
   <div class="tabs" id="profileTabs"></div>
   <div class="txn-list" id="txnList"><div class="empty-note">Loading…</div></div>
 
+</div>
+  </div>
 </div>
 
 <button class="fab" id="fabAdd" title="Add expense">+</button>

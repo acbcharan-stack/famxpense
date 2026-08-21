@@ -77,6 +77,45 @@ export function toast(msg) {
   toast._t = setTimeout(() => el.classList.remove('show'), 2200);
 }
 
+// ---------- navigation ----------
+
+const NAV_LINKS = [
+  { page: 'expenses', href: 'index.html', emoji: '💸', label: 'Expenses' },
+  { page: 'investments', href: 'investments.html', emoji: '💰', label: 'Investments' },
+  { page: 'trades', href: 'trades.html', emoji: '📈', label: 'Trading' },
+];
+
+export function initSidebar(activePage) {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const toggle = document.getElementById('menuToggle');
+  if (!sidebar) return;
+
+  sidebar.innerHTML = `
+    <div class="sidebar-brand">💸 FamCalc</div>
+    <nav class="sidebar-nav">
+      ${NAV_LINKS.map(l => `
+        <a class="nav-link${l.page === activePage ? ' active' : ''}" href="${l.href}">
+          <span class="nav-emoji">${l.emoji}</span> ${l.label}
+        </a>`).join('')}
+    </nav>`;
+
+  const closeSidebar = () => {
+    sidebar.classList.remove('open');
+    overlay?.classList.remove('open');
+  };
+  const openSidebar = () => {
+    sidebar.classList.add('open');
+    overlay?.classList.add('open');
+  };
+
+  toggle?.addEventListener('click', () => {
+    sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+  });
+  overlay?.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSidebar(); });
+}
+
 // ---------- theme ----------
 
 export function applyStoredTheme() {
@@ -115,10 +154,166 @@ export function projectedValue(amount, annualReturnPct, years) {
   return Number(amount) * Math.pow(1 + r / 100, t);
 }
 
+// Whole months between an ISO start date and a target date (never negative).
+export function monthsBetween(startDateStr, asOf = new Date()) {
+  const start = new Date(startDateStr + 'T00:00:00');
+  let months = (asOf.getFullYear() - start.getFullYear()) * 12 + (asOf.getMonth() - start.getMonth());
+  if (asOf.getDate() < start.getDate()) months -= 1;
+  return Math.max(0, months);
+}
+
+// Future value of `months` *additional* monthly SIP contributions from today onward (an ordinary
+// annuity — the first of these new contributions lands one month from now). Today's own
+// contribution, if any, belongs to sipInvestedToDate instead and must not be counted here too.
+export function sipFutureValue(monthlyAmount, annualReturnPct, months) {
+  const p = Number(monthlyAmount) || 0;
+  const n = Math.max(0, Math.round(Number(months) || 0));
+  if (p <= 0 || n === 0) return 0;
+  const i = (Number(annualReturnPct) || 0) / 100 / 12;
+  if (i === 0) return p * n;
+  return p * ((Math.pow(1 + i, n) - 1) / i);
+}
+
+// A SIP's rate can change over time: sipHistory is [{ date, amount }, ...] sorted ascending,
+// each entry's amount applying from its date until the next entry's date (or today).
+// SIP contributions land at the *start* of each period (an installment lands on the day the
+// SIP — or a new rate — takes effect, not a month later), so the period currently in effect as
+// of `asOf` counts one more installment (today's) than the whole months elapsed since it began.
+export function sipInvestedToDate(sipHistory, asOf = new Date()) {
+  if (!Array.isArray(sipHistory) || sipHistory.length === 0) return 0;
+  const sorted = [...sipHistory].sort((a, b) => a.date.localeCompare(b.date));
+  let total = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    const periodStartStr = sorted[i].date;
+    const periodStart = new Date(periodStartStr + 'T00:00:00');
+    if (periodStart > asOf) break;
+    const nextEntry = sorted[i + 1];
+    const nextPeriodStart = nextEntry ? new Date(nextEntry.date + 'T00:00:00') : null;
+    const isOpenAsOfToday = !nextPeriodStart || nextPeriodStart > asOf;
+    const installments = isOpenAsOfToday
+      ? monthsBetween(periodStartStr, asOf) + 1
+      : monthsBetween(periodStartStr, nextPeriodStart);
+    total += (Number(sorted[i].amount) || 0) * installments;
+  }
+  return total;
+}
+
+// The SIP amount currently in effect (most recent entry whose date has arrived).
+export function sipCurrentRate(sipHistory, asOf = new Date()) {
+  if (!Array.isArray(sipHistory) || sipHistory.length === 0) return 0;
+  const active = sipHistory.filter(h => new Date(h.date + 'T00:00:00') <= asOf);
+  if (active.length === 0) return 0;
+  return Number(active.reduce((a, b) => (a.date > b.date ? a : b)).amount) || 0;
+}
+
+// Total invested so far: base/top-up amount + everything contributed through the SIP schedule.
+export function investedAmount(inv) {
+  if (inv.investment_mode === 'sip') {
+    return (Number(inv.amount) || 0) + sipInvestedToDate(inv.sip_history);
+  }
+  return Number(inv.amount) || 0;
+}
+
+// An investment's expected return can be revised over time (e.g. rechecked monthly against
+// actual performance): returnHistory is [{ date, rate }, ...]. Projections use the plain
+// average of every recorded rate rather than just the latest one. Falls back to the flat
+// annual_return column when no history has been recorded.
+export function averageReturn(inv) {
+  const history = inv.return_history;
+  if (Array.isArray(history) && history.length > 0) {
+    const sum = history.reduce((s, h) => s + (Number(h.rate) || 0), 0);
+    return sum / history.length;
+  }
+  return Number(inv.annual_return) || 0;
+}
+
+// Projected value `years` from now: existing corpus grows at the (average) expected return, and
+// — for SIPs — contributions keep going at the current monthly rate for the projection horizon.
+export function investmentProjectedValue(inv, years) {
+  const rate = averageReturn(inv);
+  const grown = projectedValue(investedAmount(inv), rate, years);
+  if (inv.investment_mode === 'sip') {
+    const futureContributions = sipFutureValue(sipCurrentRate(inv.sip_history), rate, (Number(years) || 0) * 12);
+    return grown + futureContributions;
+  }
+  return grown;
+}
+
 export function sumInvested(investments) {
-  return investments.reduce((s, inv) => s + Number(inv.amount), 0);
+  return investments.reduce((s, inv) => s + investedAmount(inv), 0);
 }
 
 export function totalProjected(investments, years) {
-  return investments.reduce((s, inv) => s + projectedValue(inv.amount, inv.annual_return, years), 0);
+  return investments.reduce((s, inv) => s + investmentProjectedValue(inv, years), 0);
+}
+
+// ---------- trades ----------
+
+// The date by which the broker/tip said this trade should have hit its target percentage.
+export function tradeTargetDate(trade) {
+  const start = new Date(trade.trade_date + 'T00:00:00');
+  const n = Number(trade.period_value) || 0;
+  const d = new Date(start);
+  if (trade.period_unit === 'weeks') d.setDate(d.getDate() + n * 7);
+  else if (trade.period_unit === 'months') d.setMonth(d.getMonth() + n);
+  else d.setDate(d.getDate() + n);
+  return d;
+}
+
+// Whole days between today and a target date; negative once the date is in the past.
+export function daysUntil(date, asOf = new Date()) {
+  const a = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
+  const b = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.round((b - a) / 86400000);
+}
+
+// Realized gain for a closed trade, in money and in percent of the amount invested.
+export function tradeGain(trade) {
+  const invested = Number(trade.invested_amount) || 0;
+  const exit = Number(trade.exit_amount) || 0;
+  const amount = exit - invested;
+  const percent = invested > 0 ? (amount / invested) * 100 : 0;
+  return { amount, percent };
+}
+
+// Everything the UI needs to badge a trade: open/closed, on-track vs overdue, target hit or not.
+export function tradeStatusInfo(trade, asOf = new Date()) {
+  const targetDate = tradeTargetDate(trade);
+  const daysLeft = daysUntil(targetDate, asOf);
+  if (trade.status === 'closed') {
+    const { amount, percent } = tradeGain(trade);
+    return {
+      closed: true,
+      amount, percent,
+      hitTarget: percent >= (Number(trade.target_percent) || 0),
+      exitedEarly: trade.exit_date ? trade.exit_date < fmtDateISO(targetDate) : false,
+      targetDate,
+    };
+  }
+  return {
+    closed: false,
+    overdue: daysLeft < 0,
+    daysLeft,
+    targetDate,
+  };
+}
+
+export function sumTradesInvested(trades) {
+  return trades.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
+}
+
+// Realized P&L across every closed trade, plus a win rate (share that hit their target %).
+export function tradesSummary(trades) {
+  const closed = trades.filter(t => t.status === 'closed');
+  const investedClosed = sumTradesInvested(closed);
+  const realizedGain = closed.reduce((s, t) => s + tradeGain(t).amount, 0);
+  const realizedPercent = investedClosed > 0 ? (realizedGain / investedClosed) * 100 : 0;
+  const wins = closed.filter(t => tradeStatusInfo(t).hitTarget).length;
+  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+  const open = trades.filter(t => t.status === 'open');
+  return {
+    realizedGain, realizedPercent,
+    closedCount: closed.length, winRate,
+    openCount: open.length, openInvested: sumTradesInvested(open),
+  };
 }

@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
+<title>Trading — Family Expense Tracker</title>
+<link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <div class="main-content">
+<div class="app">
+
+  <div class="topbar">
+    <div class="topbar-left">
+      <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
+      <h1>📈 Trading</h1>
+    </div>
+    <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
+  </div>
+
+  <div class="section-title">Performance summary</div>
+  <div class="stat-row" id="tradeStatRow"></div>
+
+  <div class="section-title">Your trades</div>
+  <div class="trade-list" id="tradeList"><div class="empty-note">Loading…</div></div>
+
+</div>
+  </div>
+</div>
+
+<button class="fab" id="fabAdd" title="Add trade">+</button>
+
+<div class="modal-overlay" id="tradeModalOverlay">
+  <div class="modal">
+    <h2 id="tradeModalTitle">Add trade</h2>
+
+    <div class="field">
+      <label for="tSymbol">Stock / trade name</label>
+      <input type="text" id="tSymbol" placeholder="e.g. RELIANCE" />
+    </div>
+
+    <div class="field">
+      <label for="tQuantity">Quantity (optional)</label>
+      <input type="number" id="tQuantity" min="0" step="0.0001" placeholder="e.g. 50" />
+    </div>
+
+    <div class="field">
+      <label for="tEntryPrice">Entry price per unit (optional)</label>
+      <input type="number" id="tEntryPrice" min="0" step="0.01" placeholder="e.g. 1250" />
+    </div>
+
+    <div class="field">
+      <label for="tInvested">Amount invested</label>
+      <input type="number" id="tInvested" min="0" step="0.01" placeholder="0.00" />
+      <div class="field-hint" id="investedHint"></div>
+    </div>
+
+    <div class="field">
+      <label for="tDate">Date of investment</label>
+      <input type="date" id="tDate" />
+    </div>
+
+    <div class="field">
+      <label>Time period to hit target</label>
+      <div class="sip-change-row" style="margin-bottom:0;">
+        <input type="number" id="tPeriodValue" min="1" step="1" placeholder="e.g. 7" style="flex:1 1 80px;" />
+        <select id="tPeriodUnit" style="flex:1 1 120px;">
+          <option value="days">Days</option>
+          <option value="weeks">Weeks</option>
+          <option value="months">Months</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="field">
+      <label for="tTargetPercent">Target gain (%)</label>
+      <input type="number" id="tTargetPercent" min="0" step="0.1" placeholder="e.g. 10" />
+    </div>
+
+    <div class="field">
+      <label for="tNotes">Trade updates / notes (optional)</label>
+      <textarea id="tNotes" rows="2" placeholder="e.g. tip said 10% in 7 days"></textarea>
+    </div>
+
+    <div class="exit-toggle-row" id="exitToggleRow">
+      <input type="checkbox" id="tExitToggle" />
+      <label for="tExitToggle">I've exited / sold this trade</label>
+    </div>
+
+    <div id="exitFields" hidden>
+      <div class="field">
+        <label for="tExitDate">Exit date</label>
+        <input type="date" id="tExitDate" />
+      </div>
+      <div class="field">
+        <label for="tExitPrice">Exit price per unit (optional)</label>
+        <input type="number" id="tExitPrice" min="0" step="0.01" placeholder="e.g. 1375" />
+      </div>
+      <div class="field">
+        <label for="tExitAmount">Amount received on exit</label>
+        <input type="number" id="tExitAmount" min="0" step="0.01" placeholder="0.00" />
+        <div class="field-hint" id="exitGainHint"></div>
+      </div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="tradeModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="tradeModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<div class="lock-overlay" id="lockOverlay">
+  <div class="lock-box">
+    <div class="lock-emoji">🔒</div>
+    <h2>Family Expense Tracker</h2>
+    <p>Enter the family passcode to continue.</p>
+    <input type="password" id="lockInput" inputmode="numeric" autocomplete="off" placeholder="Passcode" />
+    <button class="btn btn-primary" id="lockSubmit">Unlock</button>
+    <div class="lock-error" id="lockError"></div>
+  </div>
+</div>
+
+<script type="module" src="trades.js"></script>
+</body>
+</html>
