@@ -8,10 +8,17 @@
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <div class="main-content">
 <div class="app">
 
   <div class="topbar">
-    <h1>💸 Family Expense Tracker</h1>
+    <div class="topbar-left">
+      <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
+      <h1>💸 Family Expense Tracker</h1>
+    </div>
     <div style="display:flex; align-items:center; gap:10px;">
       <div class="month-nav">
         <button id="prevMonth" aria-label="Previous month">‹</button>
@@ -19,6 +26,7 @@
         <button id="nextMonth" aria-label="Next month">›</button>
       </div>
       <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
+      <button class="icon-btn" id="signOutBtn" title="Sign out">🚪</button>
     </div>
   </div>
 
@@ -93,6 +101,8 @@
   <div class="txn-list" id="txnList"><div class="empty-note">Loading…</div></div>
 
 </div>
+  </div>
+</div>
 
 <button class="fab" id="fabAdd" title="Add expense">+</button>
 
@@ -128,6 +138,40 @@
 
 <div class="toast" id="toast"></div>
 
+<div class="modal-overlay" id="profileDetailOverlay">
+  <div class="modal">
+    <h2 id="profileDetailTitle">Profile</h2>
+    <div class="stat-row" id="profileDetailStats"></div>
+    <div class="section-title" style="margin-top:20px; margin-bottom:8px;">Savings goal</div>
+    <div id="profileGoalSection"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="profileDetailClose">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="goalModalOverlay">
+  <div class="modal">
+    <h2>Set a savings goal</h2>
+    <div class="field">
+      <label for="gName">Goal name</label>
+      <input type="text" id="gName" placeholder="e.g. New laptop" />
+    </div>
+    <div class="field">
+      <label for="gTarget">Target amount</label>
+      <input type="number" id="gTarget" min="0.01" step="0.01" placeholder="0.00" />
+    </div>
+    <div class="field">
+      <label for="gDate">Target date (optional)</label>
+      <input type="date" id="gDate" />
+    </div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="goalModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="goalModalSave">Save goal</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="importOverlay">
   <div class="modal">
     <h2>Import expenses</h2>
@@ -140,14 +184,13 @@
   </div>
 </div>
 
-<div class="lock-overlay" id="lockOverlay">
+<div class="lock-overlay" id="authOverlay">
   <div class="lock-box">
     <div class="lock-emoji">🔒</div>
     <h2>Family Expense Tracker</h2>
-    <p>Enter the family passcode to continue.</p>
-    <input type="password" id="lockInput" inputmode="numeric" autocomplete="off" placeholder="Passcode" />
-    <button class="btn btn-primary" id="lockSubmit">Unlock</button>
-    <div class="lock-error" id="lockError"></div>
+    <p>Sign in with an authorized family Google account to continue.</p>
+    <button class="btn btn-primary" id="googleSignInBtn">Sign in with Google</button>
+    <div class="lock-error" id="authError"></div>
   </div>
 </div>
 

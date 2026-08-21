@@ -8,9 +8,9 @@ create extension if not exists pg_net with schema extensions;
 
 -- Stores the same CRON_SECRET value you set as an Edge Function secret, so the cron job
 -- can prove to the function that the call came from pg_cron and not a random visitor.
--- Replace fa9b582e9b9508552d9e95e7bd4a15cbafc3a430b9cf5218 below with the value you also passed to `supabase secrets set`.
+-- Replace 2158103fecdf1e4393da2e8fd9d5b95d2b357845e2025f2e below with the value you also passed to `supabase secrets set`.
 select vault.create_secret(
-  'fa9b582e9b9508552d9e95e7bd4a15cbafc3a430b9cf5218',
+  '2158103fecdf1e4393da2e8fd9d5b95d2b357845e2025f2e',
   'cron_secret',
   'Shared secret the notify Edge Function checks for in the x-cron-secret header'
 );
