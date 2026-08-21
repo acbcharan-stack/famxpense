@@ -5,8 +5,10 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-// Google Sign-In gates the UI; RLS policies in schema.sql (is_family_member()) gate the
-// data itself using this same list, so keep the two in sync.
+// Password auth gates the UI; RLS policies in schema.sql (is_family_member()) gate the
+// data itself using this same list, so keep the two in sync. Only these 4 emails should
+// ever have a Supabase Auth account (create them in the dashboard, not here — a password
+// never belongs in source code).
 export const ALLOWED_EMAILS = [
   'acb.charan@gmail.com',
   'acboopathy@gmail.com',
@@ -16,7 +18,10 @@ export const ALLOWED_EMAILS = [
 
 export function setupAuth() {
   const overlay = document.getElementById('authOverlay');
-  const signInBtn = document.getElementById('googleSignInBtn');
+  const form = document.getElementById('authForm');
+  const emailInput = document.getElementById('authEmail');
+  const passwordInput = document.getElementById('authPassword');
+  const submitBtn = document.getElementById('authSubmitBtn');
   const errorEl = document.getElementById('authError');
 
   return new Promise((resolve) => {
@@ -39,9 +44,22 @@ export function setupAuth() {
     sb.auth.onAuthStateChange((_event, session) => { handleSession(session); });
     sb.auth.getSession().then(({ data }) => handleSession(data.session));
 
-    signInBtn?.addEventListener('click', () => {
+    form?.addEventListener('submit', async (e) => {
+      e.preventDefault();
       if (errorEl) errorEl.textContent = '';
-      sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } });
+      const email = emailInput.value.trim();
+      const password = passwordInput.value;
+      if (!email || !password) return;
+
+      submitBtn.disabled = true;
+      const { error } = await sb.auth.signInWithPassword({ email, password });
+      submitBtn.disabled = false;
+
+      if (error) {
+        if (errorEl) errorEl.textContent = 'Incorrect email or password.';
+        passwordInput.value = '';
+        passwordInput.focus();
+      }
     });
   });
 }
