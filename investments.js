@@ -1,5 +1,5 @@
 import {
-  sb, setupAuth, signOut, toast, fmtMoney, escapeHtml, fmtDateISO,
+  sb, setupAuth, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
@@ -324,7 +324,6 @@ async function init() {
   applyStoredTheme();
   initSidebar('investments');
   await setupAuth();
-  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
   document.getElementById('fabAdd').addEventListener('click', () => openModal(null));
