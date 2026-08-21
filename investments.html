@@ -8,14 +8,21 @@
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+<div class="layout">
+  <nav class="sidebar" id="sidebar"></nav>
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+  <div class="main-content">
 <div class="app">
 
   <div class="topbar">
-    <div style="display:flex; align-items:center; gap:10px;">
-      <a class="icon-btn" href="index.html" title="Back to expenses">←</a>
+    <div class="topbar-left">
+      <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
       <h1>💰 Savings & Investments</h1>
     </div>
-    <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
+    <div style="display:flex; align-items:center; gap:10px;">
+      <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
+      <button class="icon-btn" id="signOutBtn" title="Sign out">🚪</button>
+    </div>
   </div>
 
   <div class="section-title">Projected value</div>
@@ -31,12 +38,18 @@
   <div class="invest-list" id="investList"><div class="empty-note">Loading…</div></div>
 
 </div>
+  </div>
+</div>
 
 <button class="fab" id="fabAdd" title="Add investment">+</button>
 
 <div class="modal-overlay" id="investModalOverlay">
   <div class="modal">
     <h2 id="investModalTitle">Add investment</h2>
+    <div class="field">
+      <label>Profile</label>
+      <div class="profile-picker" id="investProfilePicker"></div>
+    </div>
     <div class="field">
       <label for="iName">Name (optional)</label>
       <input type="text" id="iName" placeholder="e.g. HDFC Flexicap SIP" />
@@ -108,14 +121,13 @@
 
 <div class="toast" id="toast"></div>
 
-<div class="lock-overlay" id="lockOverlay">
+<div class="lock-overlay" id="authOverlay">
   <div class="lock-box">
     <div class="lock-emoji">🔒</div>
     <h2>Family Expense Tracker</h2>
-    <p>Enter the family passcode to continue.</p>
-    <input type="password" id="lockInput" inputmode="numeric" autocomplete="off" placeholder="Passcode" />
-    <button class="btn btn-primary" id="lockSubmit">Unlock</button>
-    <div class="lock-error" id="lockError"></div>
+    <p>Sign in with an authorized family Google account to continue.</p>
+    <button class="btn btn-primary" id="googleSignInBtn">Sign in with Google</button>
+    <div class="lock-error" id="authError"></div>
   </div>
 </div>
 

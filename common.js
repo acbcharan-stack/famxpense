@@ -5,44 +5,50 @@ const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBh
 
 export const sb = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-const PASSCODE_HASH = '0a95adbf8581859ae0cc477127abeaf4ad89916405c41855af8fbc482e1634e8';
-const UNLOCK_KEY = 'famExpenseUnlocked';
+// Google Sign-In gates the UI; RLS policies in schema.sql (is_family_member()) gate the
+// data itself using this same list, so keep the two in sync.
+export const ALLOWED_EMAILS = [
+  'acb.charan@gmail.com',
+  'acboopathy@gmail.com',
+  'namca2000@gmail.com',
+  'sudanboopathy72@gmail.com',
+];
 
-async function sha256Hex(text) {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
-export function setupLock() {
-  const overlay = document.getElementById('lockOverlay');
-  const input = document.getElementById('lockInput');
-  const error = document.getElementById('lockError');
-  const submitBtn = document.getElementById('lockSubmit');
-
-  if (localStorage.getItem(UNLOCK_KEY) === '1') {
-    overlay.classList.add('hidden');
-    return Promise.resolve();
-  }
+export function setupAuth() {
+  const overlay = document.getElementById('authOverlay');
+  const signInBtn = document.getElementById('googleSignInBtn');
+  const errorEl = document.getElementById('authError');
 
   return new Promise((resolve) => {
-    const tryUnlock = async () => {
-      const val = input.value.trim();
-      if (!val) return;
-      const hash = await sha256Hex(val);
-      if (hash === PASSCODE_HASH) {
-        localStorage.setItem(UNLOCK_KEY, '1');
+    let resolved = false;
+
+    const handleSession = async (session) => {
+      if (session && ALLOWED_EMAILS.includes(session.user.email)) {
         overlay.classList.add('hidden');
-        resolve();
+        if (!resolved) { resolved = true; resolve(); }
+      } else if (session) {
+        const deniedEmail = session.user.email;
+        await sb.auth.signOut();
+        if (errorEl) errorEl.textContent = `${deniedEmail} isn't on the family list.`;
+        overlay.classList.remove('hidden');
       } else {
-        error.textContent = 'Incorrect passcode. Try again.';
-        input.value = '';
-        input.focus();
+        overlay.classList.remove('hidden');
       }
     };
-    submitBtn.addEventListener('click', tryUnlock);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter') tryUnlock(); });
-    input.focus();
+
+    sb.auth.onAuthStateChange((_event, session) => { handleSession(session); });
+    sb.auth.getSession().then(({ data }) => handleSession(data.session));
+
+    signInBtn?.addEventListener('click', () => {
+      if (errorEl) errorEl.textContent = '';
+      sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: window.location.href } });
+    });
   });
+}
+
+export async function signOut() {
+  await sb.auth.signOut();
+  window.location.reload();
 }
 
 // ---------- date / money helpers ----------
@@ -75,6 +81,45 @@ export function toast(msg) {
   el.classList.add('show');
   clearTimeout(toast._t);
   toast._t = setTimeout(() => el.classList.remove('show'), 2200);
+}
+
+// ---------- navigation ----------
+
+const NAV_LINKS = [
+  { page: 'expenses', href: 'index.html', emoji: '💸', label: 'Expenses' },
+  { page: 'investments', href: 'investments.html', emoji: '💰', label: 'Investments' },
+  { page: 'trades', href: 'trades.html', emoji: '📈', label: 'Trading' },
+];
+
+export function initSidebar(activePage) {
+  const sidebar = document.getElementById('sidebar');
+  const overlay = document.getElementById('sidebarOverlay');
+  const toggle = document.getElementById('menuToggle');
+  if (!sidebar) return;
+
+  sidebar.innerHTML = `
+    <div class="sidebar-brand">💸 FamCalc</div>
+    <nav class="sidebar-nav">
+      ${NAV_LINKS.map(l => `
+        <a class="nav-link${l.page === activePage ? ' active' : ''}" href="${l.href}">
+          <span class="nav-emoji">${l.emoji}</span> ${l.label}
+        </a>`).join('')}
+    </nav>`;
+
+  const closeSidebar = () => {
+    sidebar.classList.remove('open');
+    overlay?.classList.remove('open');
+  };
+  const openSidebar = () => {
+    sidebar.classList.add('open');
+    overlay?.classList.add('open');
+  };
+
+  toggle?.addEventListener('click', () => {
+    sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+  });
+  overlay?.addEventListener('click', closeSidebar);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSidebar(); });
 }
 
 // ---------- theme ----------
@@ -206,4 +251,94 @@ export function sumInvested(investments) {
 
 export function totalProjected(investments, years) {
   return investments.reduce((s, inv) => s + investmentProjectedValue(inv, years), 0);
+}
+
+// ---------- trades ----------
+
+// The date by which the broker/tip said this trade should have hit its target percentage.
+export function tradeTargetDate(trade) {
+  const start = new Date(trade.trade_date + 'T00:00:00');
+  const n = Number(trade.period_value) || 0;
+  const d = new Date(start);
+  if (trade.period_unit === 'weeks') d.setDate(d.getDate() + n * 7);
+  else if (trade.period_unit === 'months') d.setMonth(d.getMonth() + n);
+  else d.setDate(d.getDate() + n);
+  return d;
+}
+
+// Whole days between today and a target date; negative once the date is in the past.
+export function daysUntil(date, asOf = new Date()) {
+  const a = new Date(asOf.getFullYear(), asOf.getMonth(), asOf.getDate());
+  const b = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  return Math.round((b - a) / 86400000);
+}
+
+// Realized gain for a closed trade, in money and in percent of the amount invested.
+export function tradeGain(trade) {
+  const invested = Number(trade.invested_amount) || 0;
+  const exit = Number(trade.exit_amount) || 0;
+  const amount = exit - invested;
+  const percent = invested > 0 ? (amount / invested) * 100 : 0;
+  return { amount, percent };
+}
+
+// Everything the UI needs to badge a trade: open/closed, on-track vs overdue, target hit or not.
+export function tradeStatusInfo(trade, asOf = new Date()) {
+  const targetDate = tradeTargetDate(trade);
+  const daysLeft = daysUntil(targetDate, asOf);
+  if (trade.status === 'closed') {
+    const { amount, percent } = tradeGain(trade);
+    return {
+      closed: true,
+      amount, percent,
+      hitTarget: percent >= (Number(trade.target_percent) || 0),
+      exitedEarly: trade.exit_date ? trade.exit_date < fmtDateISO(targetDate) : false,
+      targetDate,
+    };
+  }
+  return {
+    closed: false,
+    overdue: daysLeft < 0,
+    daysLeft,
+    targetDate,
+  };
+}
+
+export function sumTradesInvested(trades) {
+  return trades.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
+}
+
+// Realized P&L across every closed trade, plus a win rate (share that hit their target %).
+// ---------- goals ----------
+
+// Cumulative (budget - spent) since a goal's creation, one month at a time. Months with no
+// budget row for the profile contribute nothing (no leftover to speak of, not a deficit).
+export function goalProgress(goalCreatedAt, budgetsForProfile, expensesForProfile) {
+  const startMonth = startOfMonth(new Date(goalCreatedAt));
+  let surplus = 0;
+  budgetsForProfile.forEach(b => {
+    const monthStart = new Date(b.month + 'T00:00:00');
+    if (monthStart < startMonth) return;
+    const monthEndISO = fmtDateISO(addMonths(monthStart, 1));
+    const spent = expensesForProfile
+      .filter(e => e.expense_date >= b.month && e.expense_date < monthEndISO)
+      .reduce((s, e) => s + Number(e.amount), 0);
+    surplus += Number(b.amount) - spent;
+  });
+  return surplus;
+}
+
+export function tradesSummary(trades) {
+  const closed = trades.filter(t => t.status === 'closed');
+  const investedClosed = sumTradesInvested(closed);
+  const realizedGain = closed.reduce((s, t) => s + tradeGain(t).amount, 0);
+  const realizedPercent = investedClosed > 0 ? (realizedGain / investedClosed) * 100 : 0;
+  const wins = closed.filter(t => tradeStatusInfo(t).hitTarget).length;
+  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
+  const open = trades.filter(t => t.status === 'open');
+  return {
+    realizedGain, realizedPercent,
+    closedCount: closed.length, winRate,
+    openCount: open.length, openInvested: sumTradesInvested(open),
+  };
 }

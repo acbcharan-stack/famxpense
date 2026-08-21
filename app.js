@@ -1,9 +1,10 @@
 import * as XLSX from 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm';
 import {
-  sb, setupLock, toast, fmtMoney, hexToRgba, escapeHtml,
+  sb, setupAuth, signOut, toast, fmtMoney, hexToRgba, escapeHtml,
   pad, fmtDateISO, startOfMonth, addMonths,
-  applyStoredTheme, toggleTheme,
+  applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
+  tradesSummary, goalProgress,
 } from './common.js';
 
 const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
@@ -13,9 +14,11 @@ let currentMonth = startOfMonth(new Date());
 let expenses = [];
 let budgets = [];
 let investments = [];
+let trades = [];
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
+let goalModalProfile = null;
 
 const TREND_MONTHS = 6;
 let trendExpenses = [];
@@ -74,8 +77,14 @@ async function loadInvestments() {
   investments = data || [];
 }
 
+async function loadTrades() {
+  const { data, error } = await sb.from('trades').select('*');
+  if (error) { toast('Error loading trades: ' + error.message); throw error; }
+  trades = data || [];
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades()]);
 }
 
 function computeProfileStats(profileId) {
@@ -150,6 +159,7 @@ function renderProfiles() {
           <div class="profile-name">
             <span class="name-text">${escapeHtml(p.name)}</span>
             <button class="rename-btn" data-action="rename" title="Rename">✏️</button>
+            <button class="rename-btn" data-action="details" title="View profile details">📊</button>
           </div>
         </div>
       </div>
@@ -174,6 +184,12 @@ function renderProfiles() {
     card.querySelector('[data-action="edit-budget"]').addEventListener('click', (e) => {
       e.stopPropagation();
       startBudgetEdit(card, p, s.budgetAmt);
+    });
+
+    // profile detail view
+    card.querySelector('[data-action="details"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openProfileDetail(p);
     });
 
     // click card body -> filter transactions to this profile
@@ -467,6 +483,128 @@ function renderAll() {
   renderInvestmentDashboard();
 }
 
+// ---------- profile detail & goals ----------
+
+async function openProfileDetail(profile) {
+  document.getElementById('profileDetailTitle').textContent = `${profile.emoji} ${profile.name}`;
+  document.getElementById('profileDetailStats').innerHTML = '<div class="empty-note">Loading…</div>';
+  document.getElementById('profileGoalSection').innerHTML = '';
+  document.getElementById('profileDetailOverlay').classList.add('open');
+
+  const monthStats = computeProfileStats(profile.id);
+
+  const yearStart = new Date(currentMonth.getFullYear(), 0, 1);
+  const yearEnd = new Date(currentMonth.getFullYear() + 1, 0, 1);
+  const { data: yearExpenses, error: yearErr } = await sb.from('expenses')
+    .select('amount')
+    .eq('profile_id', profile.id)
+    .gte('expense_date', fmtDateISO(yearStart))
+    .lt('expense_date', fmtDateISO(yearEnd));
+  const yearSpent = yearErr ? 0 : (yearExpenses || []).reduce((s, e) => s + Number(e.amount), 0);
+
+  const totalInvested = sumInvested(investments.filter(i => i.profile_id === profile.id));
+  const tradeStats = tradesSummary(trades.filter(t => t.profile_id === profile.id));
+
+  document.getElementById('profileDetailStats').innerHTML = `
+    <div class="stat-tile"><div class="label">This month spent</div><div class="value">${fmtMoney(monthStats.spent)}</div></div>
+    <div class="stat-tile"><div class="label">This year spent</div><div class="value">${fmtMoney(yearSpent)}</div></div>
+    <div class="stat-tile"><div class="label">Total invested</div><div class="value">${fmtMoney(totalInvested)}</div></div>
+    <div class="stat-tile"><div class="label">Trading P&L (${tradeStats.closedCount} closed)</div><div class="value ${tradeStats.realizedGain < 0 ? 'critical' : ''}">${fmtMoney(tradeStats.realizedGain)}</div></div>
+  `;
+
+  await renderGoalSection(profile);
+}
+
+async function renderGoalSection(profile) {
+  const section = document.getElementById('profileGoalSection');
+  section.innerHTML = '<div class="empty-note">Loading…</div>';
+
+  const { data: goalRows, error } = await sb.from('goals')
+    .select('*')
+    .eq('profile_id', profile.id)
+    .eq('status', 'active')
+    .order('created_at', { ascending: false })
+    .limit(1);
+
+  if (error) { section.innerHTML = '<div class="empty-note">Could not load goal.</div>'; return; }
+  const goal = goalRows && goalRows[0];
+
+  if (!goal) {
+    section.innerHTML = `
+      <div class="empty-note">No active savings goal yet.</div>
+      <button type="button" class="btn btn-ghost btn-sm" id="setGoalBtn" style="margin-top:8px;">+ Set a goal</button>
+    `;
+    document.getElementById('setGoalBtn').addEventListener('click', () => openGoalModal(profile));
+    return;
+  }
+
+  const goalStartMonth = startOfMonth(new Date(goal.created_at));
+  const [budRes, expRes] = await Promise.all([
+    sb.from('budgets').select('month, amount').eq('profile_id', profile.id).gte('month', fmtDateISO(goalStartMonth)),
+    sb.from('expenses').select('amount, expense_date').eq('profile_id', profile.id).gte('expense_date', fmtDateISO(goalStartMonth)),
+  ]);
+  const progress = Math.max(0, goalProgress(goal.created_at, budRes.data || [], expRes.data || []));
+  const pct = Math.min(100, (progress / Number(goal.target_amount)) * 100);
+  const targetDateStr = goal.target_date
+    ? new Date(goal.target_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })
+    : null;
+
+  section.innerHTML = `
+    <div class="investment-card" style="cursor:default; border-left-color: var(--status-good);">
+      <div class="investment-head">
+        <div class="investment-type">${escapeHtml(goal.name)}</div>
+        <button class="txn-del" title="Abandon goal" id="abandonGoalBtn">🗑️</button>
+      </div>
+      <div class="investment-numbers">
+        <span>Saved so far: <strong>${fmtMoney(progress)}</strong></span>
+        <span>Target: <strong>${fmtMoney(goal.target_amount)}</strong></span>
+      </div>
+      <div class="progress-track" style="margin-top:8px;"><div class="progress-fill good" style="width:${pct}%"></div></div>
+      <div class="investment-meta" style="margin-top:6px;">${pct.toFixed(0)}% of goal${targetDateStr ? ' · by ' + targetDateStr : ''} · auto-tracked from leftover monthly budget</div>
+    </div>
+  `;
+  document.getElementById('abandonGoalBtn').addEventListener('click', async () => {
+    if (!confirm('Abandon this goal?')) return;
+    const { error: abandonErr } = await sb.from('goals').update({ status: 'abandoned' }).eq('id', goal.id);
+    if (abandonErr) { toast('Failed: ' + abandonErr.message); return; }
+    renderGoalSection(profile);
+  });
+}
+
+function openGoalModal(profile) {
+  goalModalProfile = profile;
+  document.getElementById('gName').value = '';
+  document.getElementById('gTarget').value = '';
+  document.getElementById('gDate').value = '';
+  document.getElementById('goalModalOverlay').classList.add('open');
+}
+
+function closeGoalModal() {
+  document.getElementById('goalModalOverlay').classList.remove('open');
+}
+
+async function saveGoal() {
+  const name = document.getElementById('gName').value.trim();
+  const target = parseFloat(document.getElementById('gTarget').value);
+  const targetDate = document.getElementById('gDate').value;
+
+  if (!name) { toast('Enter a goal name'); return; }
+  if (isNaN(target) || target <= 0) { toast('Enter a valid target amount'); return; }
+
+  const { error } = await sb.from('goals').insert({
+    profile_id: goalModalProfile.id,
+    name,
+    target_amount: target,
+    target_date: targetDate || null,
+    status: 'active',
+  });
+  if (error) { toast('Save failed: ' + error.message); return; }
+
+  closeGoalModal();
+  toast('Goal set');
+  await renderGoalSection(goalModalProfile);
+}
+
 // ---------- excel import / export ----------
 
 const EXCEL_HEADERS = ['Date', 'Profile', 'Category', 'Amount', 'Note'];
@@ -659,7 +797,9 @@ async function saveExpense() {
 
 async function init() {
   applyStoredTheme();
-  await setupLock();
+  initSidebar('expenses');
+  await setupAuth();
+  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   CATEGORIES.forEach(c => {
     const opt = document.createElement('option');
@@ -685,7 +825,22 @@ async function init() {
     if (e.target.id === 'modalOverlay') closeModal();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') {
+      closeModal();
+      document.getElementById('profileDetailOverlay').classList.remove('open');
+      closeGoalModal();
+    }
+  });
+  document.getElementById('profileDetailClose').addEventListener('click', () => {
+    document.getElementById('profileDetailOverlay').classList.remove('open');
+  });
+  document.getElementById('profileDetailOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'profileDetailOverlay') document.getElementById('profileDetailOverlay').classList.remove('open');
+  });
+  document.getElementById('goalModalCancel').addEventListener('click', closeGoalModal);
+  document.getElementById('goalModalSave').addEventListener('click', saveGoal);
+  document.getElementById('goalModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'goalModalOverlay') closeGoalModal();
   });
   document.getElementById('toggleTableView').addEventListener('click', () => {
     chartTableView = !chartTableView;
