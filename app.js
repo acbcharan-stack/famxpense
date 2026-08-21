@@ -1,6 +1,6 @@
 import * as XLSX from 'https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm';
 import {
-  sb, setupAuth, signOut, toast, fmtMoney, hexToRgba, escapeHtml,
+  sb, setupAuth, toast, fmtMoney, hexToRgba, escapeHtml,
   pad, fmtDateISO, startOfMonth, addMonths,
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
@@ -799,7 +799,6 @@ async function init() {
   applyStoredTheme();
   initSidebar('expenses');
   await setupAuth();
-  document.getElementById('signOutBtn').addEventListener('click', signOut);
 
   CATEGORIES.forEach(c => {
     const opt = document.createElement('option');
