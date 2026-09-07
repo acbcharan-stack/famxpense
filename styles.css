@@ -891,13 +891,33 @@ table.data-table td.num, table.data-table th.num {
 
 /* ---------- investments ---------- */
 
-.invest-projection {
+.invest-group-card {
   background: var(--surface-1);
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 4px 18px;
   margin-top: 12px;
 }
+
+.invest-group-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 14px 0 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.invest-group-head strong {
+  font-size: 0.98rem;
+}
+
+.invest-group-head .total-invested {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+.invest-group-head .total-invested strong { color: var(--text-primary); }
 
 .invest-projection-row {
   display: flex;
@@ -970,8 +990,6 @@ table.data-table td.num, table.data-table th.num {
   font: inherit;
   font-variant-numeric: tabular-nums;
 }
-
-.invest-custom-row .invest-projection-values { margin-left: auto; gap: 20px; }
 
 .invest-custom-row strong {
   margin-left: auto;
@@ -1155,8 +1173,8 @@ html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
   .trend-bars { height: 140px; gap: 6px; }
   .trend-value { font-size: 0.62rem; }
   .trend-month { font-size: 0.68rem; }
-  .invest-custom-row .invest-projection-values { margin-left: 0; width: 100%; justify-content: space-between; }
   .invest-projection-row .invest-projection-values { justify-content: flex-start; gap: 16px; }
+  .invest-group-head { flex-direction: column; align-items: flex-start; }
   .stat-row { grid-template-columns: 1fr; }
   .stat-tile .value { font-size: 1.5rem; }
   .modal { padding: 16px; border-radius: 14px; }

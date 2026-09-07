@@ -316,6 +316,23 @@ export function totalActual(investments, years) {
   return investments.reduce((s, inv) => s + investmentActualValue(inv, years), 0);
 }
 
+// Groups investments by country so totals can be summed within a single currency instead of
+// naively adding, say, dollars to rupees. India sorts first, then the rest alphabetically.
+export function groupInvestmentsByCountry(investments) {
+  const map = new Map();
+  investments.forEach(inv => {
+    const country = inv.country || 'India';
+    if (!map.has(country)) map.set(country, []);
+    map.get(country).push(inv);
+  });
+  const countries = [...map.keys()].sort((a, b) => {
+    if (a === 'India') return -1;
+    if (b === 'India') return 1;
+    return a.localeCompare(b);
+  });
+  return countries.map(country => ({ country, investments: map.get(country) }));
+}
+
 // ---------- trades ----------
 
 // The date by which the broker/tip said this trade should have hit its target percentage.

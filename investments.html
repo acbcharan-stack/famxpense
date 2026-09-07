@@ -25,14 +25,13 @@
   </div>
 
   <div class="section-title">Projected value</div>
-  <div class="stat-row" id="investStatRow"></div>
-  <div class="invest-projection" id="investProjection"></div>
   <div class="invest-custom-row">
-    <label for="investCustomYears">Projected value in</label>
+    <label for="investCustomYears">Also show a custom horizon of</label>
     <input type="number" id="investCustomYears" min="1" max="60" value="15" />
-    <label for="investCustomYears">years</label>
-    <div class="invest-projection-values" id="investCustomValues"></div>
+    <label for="investCustomYears">years, below</label>
   </div>
+  <div class="invest-empty-note" id="investGroupsEmpty" style="display:none;">No investments yet. Tap + to add one.</div>
+  <div id="investGroups"></div>
 
   <div class="section-title">🇮🇳 National Invest <span class="investment-subtype">India</span></div>
   <div class="invest-list" id="investListNational"><div class="empty-note">Loading…</div></div>

@@ -1,9 +1,9 @@
 import {
-  sb, setupAuth, toast, fmtMoney, fmtMoneyCountry, escapeHtml, fmtDateISO,
+  sb, setupAuth, toast, fmtMoneyCountry, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
-  investmentActualValue, totalActual,
+  investmentActualValue, totalActual, groupInvestmentsByCountry,
 } from './common.js';
 
 let investments = [];
@@ -41,44 +41,59 @@ function renderProfilePicker() {
   });
 }
 
-function figuresHtml(projected, actual) {
+function figuresHtml(projected, actual, country) {
   return `
     <div class="figure">
       <div class="fig-label">Projected</div>
-      <div class="fig-value">${fmtMoney(projected)}</div>
+      <div class="fig-value">${fmtMoneyCountry(projected, country)}</div>
     </div>
     <div class="figure">
       <div class="fig-label">Actual (net of costs)</div>
-      <div class="fig-value net">${fmtMoney(actual)}</div>
+      <div class="fig-value net">${fmtMoneyCountry(actual, country)}</div>
     </div>`;
 }
 
+function countryLabel(country) {
+  return country === 'India' ? '🇮🇳 National' : `🌍 Global — ${escapeHtml(country)}`;
+}
+
+// One broad card per currency group — never sums different currencies together, since this
+// app has no live exchange rates (a group is exactly the investments sharing one `country`).
 function renderDashboard() {
-  const row = document.getElementById('investStatRow');
-  const totalInvested = sumInvested(investments);
-  row.innerHTML = `
-    <div class="stat-tile">
-      <div class="label">Total Invested</div>
-      <div class="value">${fmtMoney(totalInvested)}</div>
-    </div>`;
+  const container = document.getElementById('investGroups');
+  const emptyNote = document.getElementById('investGroupsEmpty');
+  const customYears = Math.max(1, parseInt(document.getElementById('investCustomYears').value, 10) || 1);
 
-  const projection = document.getElementById('investProjection');
-  projection.innerHTML = PROJECTION_MILESTONES.map(y => `
-    <div class="invest-projection-row">
-      <div class="label">In ${y} years</div>
-      <div class="invest-projection-values">${figuresHtml(totalProjected(investments, y), totalActual(investments, y))}</div>
-    </div>`).join('');
+  if (investments.length === 0) {
+    container.innerHTML = '';
+    emptyNote.style.display = '';
+    return;
+  }
+  emptyNote.style.display = 'none';
 
-  updateCustomProjection();
+  const groups = groupInvestmentsByCountry(investments);
+  container.innerHTML = groups.map(({ country, investments: groupInvestments }) => {
+    const rows = [...PROJECTION_MILESTONES, customYears]
+      .filter((y, i, arr) => arr.indexOf(y) === i) // dedupe if custom years matches a milestone
+      .sort((a, b) => a - b)
+      .map(y => `
+        <div class="invest-projection-row">
+          <div class="label">In ${y} year${y === 1 ? '' : 's'}</div>
+          <div class="invest-projection-values">${figuresHtml(totalProjected(groupInvestments, y), totalActual(groupInvestments, y), country)}</div>
+        </div>`).join('');
+    return `
+      <div class="invest-group-card">
+        <div class="invest-group-head">
+          <strong>${countryLabel(country)}</strong>
+          <span class="total-invested">Total invested: <strong>${fmtMoneyCountry(sumInvested(groupInvestments), country)}</strong></span>
+        </div>
+        ${rows}
+      </div>`;
+  }).join('');
 }
 
 function updateCustomProjection() {
-  const yearsInput = document.getElementById('investCustomYears');
-  const years = Math.max(1, parseInt(yearsInput.value, 10) || 1);
-  document.getElementById('investCustomValues').innerHTML = figuresHtml(
-    totalProjected(investments, years),
-    totalActual(investments, years)
-  );
+  renderDashboard();
 }
 
 function renderInvestmentCard(inv) {
