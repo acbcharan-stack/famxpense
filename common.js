@@ -297,6 +297,25 @@ export function totalProjected(investments, years) {
   return investments.reduce((s, inv) => s + investmentProjectedValue(inv, years), 0);
 }
 
+// What you'd actually walk away with from a given gross value, after the exit load (% on
+// redemption), brokerage (%), and any flat brokerage fee are deducted. Missing fields cost nothing.
+export function netInvestmentValue(inv, grossValue) {
+  const pct = (Number(inv.exit_load_percent) || 0) + (Number(inv.brokerage_percent) || 0);
+  const fee = Number(inv.brokerage_fee) || 0;
+  const net = grossValue - (grossValue * pct / 100) - fee;
+  return Math.max(0, net);
+}
+
+// The "actual" value `years` from now: the same growth model as investmentProjectedValue,
+// net of exit load, brokerage %, and flat brokerage fee as if you exited at that point.
+export function investmentActualValue(inv, years) {
+  return netInvestmentValue(inv, investmentProjectedValue(inv, years));
+}
+
+export function totalActual(investments, years) {
+  return investments.reduce((s, inv) => s + investmentActualValue(inv, years), 0);
+}
+
 // ---------- trades ----------
 
 // The date by which the broker/tip said this trade should have hit its target percentage.
@@ -359,6 +378,20 @@ export function sumTradesInvested(trades) {
   return trades.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
 }
 
+// What you stand to lose if a stop loss is hit: (entry price - stop loss price) x quantity.
+// Needs quantity, entry price, and an enabled stop loss price to mean anything.
+export function stopLossInfo(trade) {
+  if (!trade.stop_loss_enabled || trade.stop_loss_price == null) return null;
+  const qty = Number(trade.quantity);
+  const entry = Number(trade.entry_price);
+  const stopLoss = Number(trade.stop_loss_price);
+  if (!qty || !entry || isNaN(stopLoss)) return null;
+  const amount = (entry - stopLoss) * qty;
+  const invested = Number(trade.invested_amount) || 0;
+  const percent = invested > 0 ? (amount / invested) * 100 : 0;
+  return { amount, percent };
+}
+
 // Realized P&L across every closed trade, plus a win rate (share that hit their target %).
 // ---------- goals ----------
 
@@ -387,9 +420,14 @@ export function tradesSummary(trades) {
   const wins = closed.filter(t => tradeStatusInfo(t).hitTarget).length;
   const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
   const open = trades.filter(t => t.status === 'open');
+  const openRisk = open.reduce((s, t) => {
+    const info = stopLossInfo(t);
+    return s + (info && info.amount > 0 ? info.amount : 0);
+  }, 0);
   return {
     realizedGain, realizedPercent,
     closedCount: closed.length, winRate,
     openCount: open.length, openInvested: sumTradesInvested(open),
+    openRisk,
   };
 }

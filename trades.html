@@ -89,6 +89,25 @@
     </div>
 
     <div class="field">
+      <label for="tTriggerPrice">Target price / take-profit trigger (optional)</label>
+      <input type="number" id="tTriggerPrice" min="0" step="0.01" placeholder="e.g. 1400" />
+      <div class="field-hint" id="triggerHint"></div>
+    </div>
+
+    <div class="exit-toggle-row" id="stopLossToggleRow">
+      <input type="checkbox" id="tStopLossToggle" />
+      <label for="tStopLossToggle">This trade has a stop loss</label>
+    </div>
+
+    <div id="stopLossFields" hidden>
+      <div class="field">
+        <label for="tStopLossPrice">Stop loss price per unit</label>
+        <input type="number" id="tStopLossPrice" min="0" step="0.01" placeholder="e.g. 1150" />
+        <div class="field-hint" id="stopLossHint"></div>
+      </div>
+    </div>
+
+    <div class="field">
       <label for="tNotes">Trade updates / notes (optional)</label>
       <textarea id="tNotes" rows="2" placeholder="e.g. tip said 10% in 7 days"></textarea>
     </div>
@@ -115,6 +134,15 @@
         <label for="tExitLoad">Exit load (%) (optional)</label>
         <input type="number" id="tExitLoad" min="0" step="0.01" placeholder="e.g. 1" />
         <div class="field-hint" id="exitGainHint"></div>
+      </div>
+      <div class="field">
+        <label for="tManualOutcome">Mark outcome (optional)</label>
+        <select id="tManualOutcome">
+          <option value="">Auto (based on target %)</option>
+          <option value="successful">Successful</option>
+          <option value="unsuccessful">Unsuccessful</option>
+        </select>
+        <div class="field-hint">This is just a note on the card — it doesn't change the win-rate stat, which is always based on target %.</div>
       </div>
     </div>
 

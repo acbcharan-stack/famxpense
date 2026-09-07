@@ -891,6 +891,57 @@ table.data-table td.num, table.data-table th.num {
 
 /* ---------- investments ---------- */
 
+.invest-projection {
+  background: var(--surface-1);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 4px 18px;
+  margin-top: 12px;
+}
+
+.invest-projection-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.invest-projection-row:last-child { border-bottom: none; }
+
+.invest-projection-row .label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  min-width: 70px;
+}
+
+.invest-projection-values {
+  display: flex;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.invest-projection-values .figure {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+.invest-projection-values .fig-label {
+  font-size: 0.72rem;
+  color: var(--muted);
+}
+
+.invest-projection-values .fig-value {
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+
+.invest-projection-values .fig-value.net { color: var(--status-good); }
+
 .invest-custom-row {
   display: flex;
   align-items: center;
@@ -919,6 +970,8 @@ table.data-table td.num, table.data-table th.num {
   font: inherit;
   font-variant-numeric: tabular-nums;
 }
+
+.invest-custom-row .invest-projection-values { margin-left: auto; gap: 20px; }
 
 .invest-custom-row strong {
   margin-left: auto;
@@ -985,6 +1038,13 @@ table.data-table td.num, table.data-table th.num {
   font-size: 0.78rem;
   color: var(--muted);
 }
+
+.investment-card .invest-projection-row {
+  border-bottom: none;
+  padding: 8px 0 0;
+}
+.investment-card .invest-projection-values { gap: 16px; }
+.investment-card .fig-value { font-size: 0.92rem; }
 
 .sip-change-row {
   display: flex;
@@ -1095,7 +1155,8 @@ html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
   .trend-bars { height: 140px; gap: 6px; }
   .trend-value { font-size: 0.62rem; }
   .trend-month { font-size: 0.68rem; }
-  .invest-custom-row strong { margin-left: 0; width: 100%; }
+  .invest-custom-row .invest-projection-values { margin-left: 0; width: 100%; justify-content: space-between; }
+  .invest-projection-row .invest-projection-values { justify-content: flex-start; gap: 16px; }
   .stat-row { grid-template-columns: 1fr; }
   .stat-tile .value { font-size: 1.5rem; }
   .modal { padding: 16px; border-radius: 14px; }
