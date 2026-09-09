@@ -157,3 +157,21 @@ create policy "family only budgets" on budgets for all using (is_family_member()
 create policy "family only investments" on investments for all using (is_family_member()) with check (is_family_member());
 create policy "family only trades" on trades for all using (is_family_member()) with check (is_family_member());
 create policy "family only goals" on goals for all using (is_family_member()) with check (is_family_member());
+
+-- Savings: money just parked, no return and no projections. Kept separate from
+-- `investments` so it never mixes into invested totals or growth maths.
+create table if not exists savings (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid references profiles(id) on delete set null,
+  name text,
+  amount numeric(12,2) not null default 0 check (amount >= 0),
+  saved_date date not null default current_date,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+create index if not exists savings_profile_idx on savings (profile_id);
+
+alter table savings enable row level security;
+drop policy if exists "family only savings" on savings;
+create policy "family only savings" on savings for all using (is_family_member()) with check (is_family_member());

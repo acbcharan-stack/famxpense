@@ -1,5 +1,5 @@
 import {
-  sb, setupAuth, toast, fmtMoneyCountry, escapeHtml, fmtDateISO,
+  sb, setupAuth, toast, fmtMoney, fmtMoneyCountry, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
@@ -12,6 +12,11 @@ let editingId = null;
 let currentMode = 'lumpsum';
 let selectedProfileId = null;
 
+let savings = [];
+let savingsTableReady = true;
+let editingSavingsId = null;
+let selectedSavingsProfileId = null;
+
 async function loadInvestments() {
   const { data, error } = await sb.from('investments').select('*').order('created_at', { ascending: false });
   if (error) { toast('Error loading investments: ' + error.message); throw error; }
@@ -22,6 +27,15 @@ async function loadProfiles() {
   const { data, error } = await sb.from('profiles').select('*').order('sort_order', { ascending: true });
   if (error) { toast('Error loading profiles: ' + error.message); throw error; }
   profiles = data || [];
+}
+
+// Non-fatal: if the savings table hasn't been created yet the rest of the page still
+// works, and the Savings section shows a short "run the SQL" note instead.
+async function loadSavings() {
+  const { data, error } = await sb.from('savings').select('*').order('saved_date', { ascending: false });
+  if (error) { savingsTableReady = false; savings = []; return; }
+  savingsTableReady = true;
+  savings = data || [];
 }
 
 function renderProfilePicker() {
@@ -408,9 +422,160 @@ async function saveInvestment() {
   renderAll();
 }
 
+// ---------- savings ----------
+
+function renderSavingsProfilePicker() {
+  const picker = document.getElementById('savingsProfilePicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedSavingsProfileId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => {
+      selectedSavingsProfileId = p.id;
+      renderSavingsProfilePicker();
+    });
+    picker.appendChild(btn);
+  });
+}
+
+function renderSavingsCard(s) {
+  const card = document.createElement('div');
+  card.className = 'investment-card';
+  const dateStr = new Date(s.saved_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const owner = profiles.find(p => p.id === s.profile_id);
+  const title = s.name ? s.name : 'Savings';
+  card.innerHTML = `
+    <div class="investment-head">
+      <div class="investment-type">
+        ${escapeHtml(title)}
+        <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
+      </div>
+      <button class="txn-del" title="Delete">🗑️</button>
+    </div>
+    <div class="investment-numbers">
+      <span>Saved: <strong>${fmtMoney(s.amount)}</strong></span>
+    </div>
+    <div class="investment-meta">${dateStr}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
+  `;
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.txn-del')) return;
+    openSavingsModal(s);
+  });
+  card.querySelector('.txn-del').addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteSavings(s.id);
+  });
+  return card;
+}
+
+function renderSavings() {
+  const totalRow = document.getElementById('savingsTotalRow');
+  const list = document.getElementById('savingsList');
+
+  if (!savingsTableReady) {
+    totalRow.innerHTML = '';
+    list.innerHTML = `
+      <div class="empty-note">
+        The savings table isn't set up yet. Run the <code>savings</code> block at the end of
+        <code>schema.sql</code> in the Supabase SQL editor, then reload this page.
+      </div>`;
+    return;
+  }
+
+  const sumFor = rows => rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+  const total = sumFor(savings);
+  const perProfile = profiles
+    .map(p => ({ p, amt: sumFor(savings.filter(s => s.profile_id === p.id)) }))
+    .filter(x => x.amt > 0);
+  const unassigned = sumFor(savings.filter(s => !s.profile_id));
+
+  totalRow.innerHTML = `
+    <div class="stat-tile">
+      <div class="label">Total savings</div>
+      <div class="value">${fmtMoney(total)}</div>
+    </div>
+    ${perProfile.map(({ p, amt }) => `
+      <div class="stat-tile">
+        <div class="label">${p.emoji} ${escapeHtml(p.name)}</div>
+        <div class="value">${fmtMoney(amt)}</div>
+      </div>`).join('')}
+    ${unassigned > 0 ? `
+      <div class="stat-tile">
+        <div class="label">Unassigned</div>
+        <div class="value">${fmtMoney(unassigned)}</div>
+      </div>` : ''}
+  `;
+
+  list.innerHTML = '';
+  if (savings.length === 0) {
+    list.innerHTML = '<div class="empty-note">No savings yet. Tap “+ Add savings”.</div>';
+    return;
+  }
+  savings.forEach(s => list.appendChild(renderSavingsCard(s)));
+}
+
+function openSavingsModal(s) {
+  editingSavingsId = s ? s.id : null;
+  selectedSavingsProfileId = s ? (s.profile_id || null) : (profiles[0]?.id || null);
+  renderSavingsProfilePicker();
+  document.getElementById('savingsModalTitle').textContent = s ? 'Edit savings' : 'Add savings';
+  document.getElementById('sName').value = s ? (s.name || '') : '';
+  document.getElementById('sAmount').value = s ? s.amount : '';
+  document.getElementById('sDate').value = s ? s.saved_date : fmtDateISO(new Date());
+  document.getElementById('sNote').value = s ? (s.note || '') : '';
+  document.getElementById('savingsModalOverlay').classList.add('open');
+}
+
+function closeSavingsModal() {
+  document.getElementById('savingsModalOverlay').classList.remove('open');
+}
+
+async function saveSavings() {
+  const name = document.getElementById('sName').value.trim();
+  const amount = parseFloat(document.getElementById('sAmount').value);
+  const savedDate = document.getElementById('sDate').value;
+  const note = document.getElementById('sNote').value.trim();
+
+  if (!selectedSavingsProfileId) { toast('Pick a profile'); return; }
+  if (isNaN(amount) || amount <= 0) { toast('Enter a valid amount'); return; }
+  if (!savedDate) { toast('Pick a date'); return; }
+
+  const payload = {
+    profile_id: selectedSavingsProfileId,
+    name: name || null,
+    amount,
+    saved_date: savedDate,
+    note: note || null,
+  };
+
+  const { error } = editingSavingsId
+    ? await sb.from('savings').update(payload).eq('id', editingSavingsId)
+    : await sb.from('savings').insert(payload);
+
+  if (error) { toast('Save failed: ' + error.message); return; }
+
+  closeSavingsModal();
+  toast(editingSavingsId ? 'Savings updated' : 'Savings added');
+  await loadSavings();
+  renderAll();
+}
+
+async function deleteSavings(id) {
+  if (!confirm('Delete this savings entry?')) return;
+  const { error } = await sb.from('savings').delete().eq('id', id);
+  if (error) { toast('Delete failed: ' + error.message); return; }
+  await loadSavings();
+  renderAll();
+  toast('Savings deleted');
+}
+
 function renderAll() {
   renderDashboard();
   renderList();
+  renderSavings();
 }
 
 async function init() {
@@ -432,11 +597,18 @@ async function init() {
   document.getElementById('investModalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'investModalOverlay') closeModal();
   });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); closeSavingsModal(); } });
   document.getElementById('investCustomYears').addEventListener('input', updateCustomProjection);
 
+  document.getElementById('addSavingsBtn').addEventListener('click', () => openSavingsModal(null));
+  document.getElementById('savingsModalCancel').addEventListener('click', closeSavingsModal);
+  document.getElementById('savingsModalSave').addEventListener('click', saveSavings);
+  document.getElementById('savingsModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'savingsModalOverlay') closeSavingsModal();
+  });
+
   try {
-    await Promise.all([loadInvestments(), loadProfiles()]);
+    await Promise.all([loadInvestments(), loadProfiles(), loadSavings()]);
   } catch {
     document.querySelector('.app').innerHTML = `
       <div class="empty-note" style="padding:60px 20px; text-align:center;">
