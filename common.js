@@ -69,6 +69,42 @@ export async function signOut() {
   window.location.reload();
 }
 
+// ---------- expenses / receipt scanning ----------
+
+// The category list for the Add-expense dropdown and import validation. The
+// parse-receipt edge function keeps its own copy — update both together.
+export const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
+
+// Downscale an image File to a JPEG data URL so receipt uploads stay small and fast.
+export async function fileToScaledJpeg(file, maxDim = 1500, quality = 0.82) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+// Send scaled screenshots to the parse-receipt edge function. Resolves to an array of
+// parsed transaction objects (see that function for the shape); throws with a readable
+// message on failure.
+export async function scanReceipts(dataUrls) {
+  const { data, error } = await sb.functions.invoke('parse-receipt', { body: { images: dataUrls } });
+  if (error) {
+    let msg = error.message || 'Scan failed';
+    try {
+      const ctx = await error.context?.json?.();
+      if (ctx?.error) msg = ctx.error;
+    } catch { /* keep the generic message */ }
+    throw new Error(msg);
+  }
+  return Array.isArray(data?.transactions) ? data.transactions : [];
+}
+
 // ---------- date / money helpers ----------
 
 export function pad(n) { return String(n).padStart(2, '0'); }

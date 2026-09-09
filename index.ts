@@ -1,175 +1,197 @@
-// Sends trade/investment notification emails via Mailgun. Triggered by pg_cron (see
-// notify_setup.sql), never called directly by the frontend.
-//
-// POST body: { "type": "expiry" | "monthly" }
-//   expiry  — daily check: any open trade whose target date has passed gets one alert,
-//             then is marked notified_at so it isn't re-sent tomorrow.
-//   monthly — a single digest email summarizing all trades and investments.
-//
-// Auth: a shared secret in the `x-cron-secret` header (not a Supabase JWT — this function
-// is deployed with --no-verify-jwt since only pg_cron calls it).
-//
-// Mailgun sandbox domains only deliver to addresses added as "Authorized Recipients" in
-// the Mailgun dashboard (each must accept a one-time confirmation email).
+/*
+ * parse-receipt — reads payment screenshots / receipts / itemised bills with the Gemini
+ * API and returns structured transactions for the "Scan receipt / screenshot" flow.
+ * Called from the browser via supabase-js functions.invoke('parse-receipt', { body: { images } }).
+ *
+ * verify_jwt is enabled, and the caller's email is additionally checked against
+ * FAMILY_EMAILS. Keep that list in sync with ALLOWED_EMAILS in common.js.
+ *
+ * Secrets: GEMINI_API_KEY (required), GEMINI_MODEL (optional), FAMILY_EMAILS (optional).
+ */
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
-import { createClient } from "jsr:@supabase/supabase-js@2";
 
-const MAILGUN_API_KEY = Deno.env.get("MAILGUN_API_KEY")!;
-const MAILGUN_DOMAIN = Deno.env.get("MAILGUN_DOMAIN")!;
-const NOTIFY_EMAILS = Deno.env.get("NOTIFY_EMAILS")!
-  .split(",")
-  .map((e) => e.trim())
-  .filter(Boolean);
-const CRON_SECRET = Deno.env.get("CRON_SECRET")!;
+const GEMINI_API_KEY = Deno.env.get("GEMINI_API_KEY") ?? "";
+const GEMINI_MODEL = Deno.env.get("GEMINI_MODEL") ?? "gemini-2.5-flash";
+const FAMILY_EMAILS = (Deno.env.get("FAMILY_EMAILS") ??
+  "acb.charan@gmail.com,acboopathy@gmail.com,namca2000@gmail.com,sudanboopathy72@gmail.com")
+  .split(",").map((e) => e.trim().toLowerCase()).filter(Boolean);
 
-const sb = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-);
+const MAX_IMAGES = 5;
 
-function fmtMoney(n: unknown) {
-  const v = Number(n) || 0;
-  return (v < 0 ? "-" : "") + "₹" + Math.abs(v).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
+const CATEGORIES = [
+  "Food", "Groceries", "Transport", "Housing/Rent", "Utilities",
+  "Entertainment", "Shopping", "Health", "Education", "Savings & Investment", "Other",
+];
 
-function isoDate(d: Date) {
-  return d.toISOString().slice(0, 10);
-}
+const CORS: Record<string, string> = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
 
-// Mirrors tradeTargetDate() in common.js.
-function targetDate(trade: any): Date {
-  const d = new Date(trade.trade_date + "T00:00:00Z");
-  const n = Number(trade.period_value) || 0;
-  if (trade.period_unit === "weeks") d.setUTCDate(d.getUTCDate() + n * 7);
-  else if (trade.period_unit === "months") d.setUTCMonth(d.getUTCMonth() + n);
-  else d.setUTCDate(d.getUTCDate() + n);
-  return d;
-}
-
-function tradeGain(t: any) {
-  const invested = Number(t.invested_amount) || 0;
-  const exit = Number(t.exit_amount) || 0;
-  const amount = exit - invested;
-  const percent = invested > 0 ? (amount / invested) * 100 : 0;
-  return { amount, percent };
-}
-
-async function sendEmail(subject: string, html: string) {
-  const form = new URLSearchParams();
-  form.set("from", `Family Expense Tracker <mailgun@${MAILGUN_DOMAIN}>`);
-  for (const to of NOTIFY_EMAILS) form.append("to", to);
-  form.set("subject", subject);
-  form.set("html", html);
-
-  const res = await fetch(`https://api.mailgun.net/v3/${MAILGUN_DOMAIN}/messages`, {
-    method: "POST",
-    headers: {
-      Authorization: `Basic ${btoa(`api:${MAILGUN_API_KEY}`)}`,
-      "Content-Type": "application/x-www-form-urlencoded",
-    },
-    body: form,
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { ...CORS, "Content-Type": "application/json" },
   });
-  if (!res.ok) {
-    console.error("Mailgun send failed:", res.status, await res.text());
+}
+
+function emailFromJwt(authHeader: string | null): string | null {
+  if (!authHeader || !authHeader.startsWith("Bearer ")) return null;
+  try {
+    let seg = authHeader.slice(7).split(".")[1] ?? "";
+    seg = seg.replace(/-/g, "+").replace(/_/g, "/");
+    while (seg.length % 4) seg += "=";
+    const claims = JSON.parse(atob(seg));
+    const email = claims.email ?? claims.user_metadata?.email ?? null;
+    return email ? String(email).toLowerCase() : null;
+  } catch {
+    return null;
   }
 }
 
-// One open trade past its target date = one alert email, then it's marked notified_at
-// so it doesn't fire again tomorrow (re-editing the trade's date/period clears the flag
-// naturally since it's a fresh row state, but simplest is: notified once, ever).
-async function checkExpiries() {
-  const { data: trades, error } = await sb
-    .from("trades")
-    .select("*")
-    .eq("status", "open")
-    .is("notified_at", null);
-  if (error) throw error;
+const PROMPT = [
+  "You are a parser for an Indian family expense tracker. You are given one or more images:",
+  "UPI / GPay / PhonePe / Paytm payment screenshots, card payment confirmations, bank SMS",
+  "screenshots, or itemised shop / restaurant bills.",
+  "",
+  "Extract every distinct transaction or receipt you can see. For each one return:",
+  "- merchant: who was paid (or who paid, for received money). Keep it short.",
+  "- total_amount: the single amount that actually moved, as a number (grand total after tax and tip).",
+  "- currency: ISO code. Default INR when there is only a rupee sign or no symbol.",
+  "- date: transaction date as YYYY-MM-DD, ONLY if an actual date is visible; otherwise an empty string.",
+  "- direction: debit if money was spent or sent, credit if money was received.",
+  "- payment_method: one of upi, card, cash, netbanking, wallet, unknown.",
+  "- reference: UPI ref / transaction id / order id / card last 4 digits if shown, else empty string.",
+  "- suggested_category: the best fit from EXACTLY this list: " + CATEGORIES.join(", ") + ".",
+  "- amount_candidates: every distinct money amount visible for this transaction (subtotal, tax, tip, delivery, total) as numbers.",
+  "- line_items: for an itemised bill, one entry per line with description, amount (number), category. Empty array if not itemised.",
+  "- notes: anything else useful in one short phrase, else empty string.",
+  "- confidence: 0 to 1, how sure you are of total_amount.",
+  "",
+  "Never invent numbers or dates. If a field is unknown use an empty string, empty array, or 0. Return only the JSON object.",
+].join("\n");
 
-  const today = new Date();
-  const due = (trades || []).filter((t) => targetDate(t) <= today);
+const responseSchema = {
+  type: "OBJECT",
+  properties: {
+    transactions: {
+      type: "ARRAY",
+      items: {
+        type: "OBJECT",
+        properties: {
+          merchant: { type: "STRING" },
+          total_amount: { type: "NUMBER" },
+          currency: { type: "STRING" },
+          date: { type: "STRING" },
+          direction: { type: "STRING", enum: ["debit", "credit"] },
+          payment_method: {
+            type: "STRING",
+            enum: ["upi", "card", "cash", "netbanking", "wallet", "unknown"],
+          },
+          reference: { type: "STRING" },
+          suggested_category: { type: "STRING", enum: CATEGORIES },
+          amount_candidates: { type: "ARRAY", items: { type: "NUMBER" } },
+          line_items: {
+            type: "ARRAY",
+            items: {
+              type: "OBJECT",
+              properties: {
+                description: { type: "STRING" },
+                amount: { type: "NUMBER" },
+                category: { type: "STRING" },
+              },
+              required: ["description", "amount"],
+            },
+          },
+          notes: { type: "STRING" },
+          confidence: { type: "NUMBER" },
+        },
+        required: ["merchant", "total_amount", "direction", "suggested_category"],
+      },
+    },
+  },
+  required: ["transactions"],
+};
 
-  for (const t of due) {
-    const td = targetDate(t);
-    await sendEmail(
-      `Trade window closed: ${t.symbol}`,
-      `<p><strong>${t.symbol}</strong> — invested ${fmtMoney(t.invested_amount)} on ${t.trade_date}.</p>
-       <p>Target was <strong>${t.target_percent}%</strong> by <strong>${isoDate(td)}</strong> (${t.period_value} ${t.period_unit}).</p>
-       <p>Time to check whether it delivered — log the exit (or keep holding) in the Trading tab.</p>`,
-    );
-    await sb.from("trades").update({ notified_at: new Date().toISOString() }).eq("id", t.id);
-  }
-
-  return due.length;
-}
-
-async function monthlyDigest() {
-  const [{ data: trades }, { data: investments }] = await Promise.all([
-    sb.from("trades").select("*"),
-    sb.from("investments").select("*"),
-  ]);
-
-  const open = (trades || []).filter((t) => t.status === "open");
-  const closed = (trades || []).filter((t) => t.status === "closed");
-
-  const investedClosed = closed.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
-  const realizedGain = closed.reduce((s, t) => s + tradeGain(t).amount, 0);
-  const realizedPct = investedClosed > 0 ? (realizedGain / investedClosed) * 100 : 0;
-  const wins = closed.filter((t) => tradeGain(t).percent >= (Number(t.target_percent) || 0)).length;
-  const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
-  const openInvested = open.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
-
-  const openRows = open
-    .map((t) => {
-      const td = targetDate(t);
-      const daysLeft = Math.round((td.getTime() - Date.now()) / 86400000);
-      const statusLabel = daysLeft < 0 ? `Overdue ${Math.abs(daysLeft)}d` : `${daysLeft}d left`;
-      return `<tr><td>${t.symbol}</td><td>${fmtMoney(t.invested_amount)}</td><td>${t.target_percent}%</td><td>${statusLabel}</td></tr>`;
-    })
-    .join("");
-
-  const investedTotal = (investments || []).reduce((s, inv) => s + (Number(inv.amount) || 0), 0);
-  const investRows = (investments || [])
-    .map((inv) => `<tr><td>${inv.name || inv.type}</td><td>${inv.type}</td><td>${fmtMoney(inv.amount)}</td><td>${inv.annual_return}%</td></tr>`)
-    .join("");
-
-  const html = `
-    <h2>Monthly trading &amp; investment check-in</h2>
-    <h3>Trades</h3>
-    <p>Realized P&amp;L: <strong>${fmtMoney(realizedGain)}</strong> (${realizedPct.toFixed(2)}%) across ${closed.length} closed trades — win rate ${winRate.toFixed(0)}%.</p>
-    <p>Open positions: ${open.length}, ${fmtMoney(openInvested)} invested.</p>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>Symbol</th><th>Invested</th><th>Target</th><th>Status</th></tr>
-      ${openRows || '<tr><td colspan="4">No open trades</td></tr>'}
-    </table>
-    <h3>Investments</h3>
-    <p>Total invested: <strong>${fmtMoney(investedTotal)}</strong> across ${(investments || []).length} investments.</p>
-    <table border="1" cellpadding="6" cellspacing="0">
-      <tr><th>Name</th><th>Type</th><th>Invested</th><th>Return</th></tr>
-      ${investRows || '<tr><td colspan="4">No investments yet</td></tr>'}
-    </table>
-  `;
-
-  await sendEmail("Monthly trading & investment check-in", html);
+function splitDataUrl(s: string): { mime: string; data: string } {
+  const m = /^data:([^;]+);base64,(.*)$/s.exec(s);
+  if (m) return { mime: m[1], data: m[2] };
+  return { mime: "image/jpeg", data: s };
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.headers.get("x-cron-secret") !== CRON_SECRET) {
-    return new Response("Unauthorized", { status: 401 });
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
+  if (req.method !== "POST") return json({ error: "Method not allowed" }, 405);
+
+  const email = emailFromJwt(req.headers.get("Authorization"));
+  if (!email || !FAMILY_EMAILS.includes(email)) {
+    return json({ error: "Not authorised" }, 403);
   }
 
-  const body = await req.json().catch(() => ({}));
-  const type = body.type === "monthly" ? "monthly" : "expiry";
-
+  let images: string[];
   try {
-    if (type === "monthly") {
-      await monthlyDigest();
-      return Response.json({ ok: true, type });
-    }
-    const count = await checkExpiries();
-    return Response.json({ ok: true, type, alertsSent: count });
-  } catch (err) {
-    console.error(err);
-    return Response.json({ ok: false, error: String(err) }, { status: 500 });
+    const body = await req.json();
+    images = Array.isArray(body?.images) ? body.images : [];
+  } catch {
+    return json({ error: "Invalid request body" }, 400);
   }
+  if (images.length === 0) return json({ error: "No images provided" }, 400);
+  if (images.length > MAX_IMAGES) {
+    return json({ error: "At most " + MAX_IMAGES + " images per scan" }, 413);
+  }
+
+  const parts: unknown[] = [{ text: PROMPT }];
+  for (const img of images) {
+    const { mime, data } = splitDataUrl(String(img));
+    parts.push({ inline_data: { mime_type: mime, data } });
+  }
+
+  let geminiRes: Response;
+  try {
+    geminiRes = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models/" +
+        GEMINI_MODEL + ":generateContent?key=" + GEMINI_API_KEY,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts }],
+          generationConfig: {
+            responseMimeType: "application/json",
+            responseSchema,
+            temperature: 0,
+          },
+        }),
+      },
+    );
+  } catch (err) {
+    console.error("Gemini fetch failed:", err);
+    return json({ error: "Could not reach Gemini" }, 502);
+  }
+
+  if (!geminiRes.ok) {
+    console.error("Gemini error:", geminiRes.status, await geminiRes.text());
+    return json({ error: "Gemini could not process the image" }, 502);
+  }
+
+  const payload = await geminiRes.json();
+  const text = payload?.candidates?.[0]?.content?.parts?.[0]?.text;
+  if (!text) {
+    console.error("Gemini returned no text:", JSON.stringify(payload).slice(0, 500));
+    return json({ error: "Could not read the image" }, 502);
+  }
+
+  let parsed: { transactions?: unknown[] };
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    console.error("Gemini JSON parse failed:", text.slice(0, 500));
+    return json({ error: "Could not read the image" }, 502);
+  }
+
+  return json({
+    transactions: Array.isArray(parsed.transactions) ? parsed.transactions : [],
+  });
 });
