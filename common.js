@@ -76,7 +76,8 @@ export async function signOut() {
 export const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
 
 // Downscale an image File to a JPEG data URL so receipt uploads stay small and fast.
-export async function fileToScaledJpeg(file, maxDim = 1500, quality = 0.82) {
+// Smaller = faster upload and a quicker vision pass; ~1100px keeps text readable.
+export async function fileToScaledJpeg(file, maxDim = 1100, quality = 0.8) {
   const bitmap = await createImageBitmap(file);
   const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
   const w = Math.max(1, Math.round(bitmap.width * scale));
