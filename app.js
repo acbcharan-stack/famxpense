@@ -1000,7 +1000,7 @@ async function handleScanFiles(fileList) {
   scanDraft = [];
   document.getElementById('scanSave').textContent = 'Save';
   document.getElementById('scanSave').disabled = true;
-  status.innerHTML = `<span class="spinner"></span> Reading ${files.length} image${files.length === 1 ? '' : 's'} with Gemini…`;
+  status.innerHTML = `<span class="spinner"></span> Reading ${files.length} image${files.length === 1 ? '' : 's'}… this usually takes 5–15 seconds.`;
   overlay.classList.add('open');
 
   try {

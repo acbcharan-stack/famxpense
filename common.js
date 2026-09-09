@@ -92,9 +92,15 @@ export async function fileToScaledJpeg(file, maxDim = 1100, quality = 0.8) {
 
 // Send scaled screenshots to the parse-receipt edge function. Resolves to an array of
 // parsed transaction objects (see that function for the shape); throws with a readable
-// message on failure.
+// message on failure or after SCAN_TIMEOUT_MS so the UI never hangs indefinitely.
+const SCAN_TIMEOUT_MS = 60000;
+
 export async function scanReceipts(dataUrls) {
-  const { data, error } = await sb.functions.invoke('parse-receipt', { body: { images: dataUrls } });
+  const invoke = sb.functions.invoke('parse-receipt', { body: { images: dataUrls } });
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Timed out — try again with one clearer image')), SCAN_TIMEOUT_MS));
+
+  const { data, error } = await Promise.race([invoke, timeout]);
   if (error) {
     let msg = error.message || 'Scan failed';
     try {
