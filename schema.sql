@@ -58,6 +58,11 @@ alter table investments add column if not exists country text not null default '
 alter table investments add column if not exists exit_load_percent numeric(5,2);
 alter table investments add column if not exists brokerage_percent numeric(5,2);
 alter table investments add column if not exists brokerage_fee numeric(12,2);
+-- Whether this investment's monthly SIP installment (or, for a lump sum, its one-time amount
+-- in its start month) should count as "spent" against the owner's monthly budget. Default true
+-- since most SIPs/investments come out of the regular budget; set false for extra money that
+-- was never part of the budgeted amount.
+alter table investments add column if not exists count_in_budget boolean not null default true;
 
 create table if not exists trades (
   id uuid primary key default gen_random_uuid(),
@@ -167,8 +172,23 @@ create table if not exists savings (
   amount numeric(12,2) not null default 0 check (amount >= 0),
   saved_date date not null default current_date,
   note text,
+  -- Whether this entry counts as "spent" against the owner's budget for the month of
+  -- saved_date. Default true (money set aside out of the regular monthly budget); set
+  -- false for extra/windfall money being saved that was never part of the budget.
+  count_in_budget boolean not null default true,
   created_at timestamptz not null default now()
 );
+
+alter table savings add column if not exists count_in_budget boolean not null default true;
+
+-- Recurring ("fixed monthly") savings: the same schedule idea as an investment SIP — `amount`
+-- becomes an optional one-time top-up outside the recurring plan, `saved_date` is the plan's
+-- start date, and recurring_history is [{date, amount}] giving the monthly amount and any
+-- later changes to it.
+alter table savings add column if not exists savings_mode text not null default 'onetime';
+alter table savings drop constraint if exists savings_savings_mode_check;
+alter table savings add constraint savings_savings_mode_check check (savings_mode in ('onetime', 'recurring'));
+alter table savings add column if not exists recurring_history jsonb;
 
 create index if not exists savings_profile_idx on savings (profile_id);
 

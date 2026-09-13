@@ -5,6 +5,7 @@ import {
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
   tradesSummary, goalProgress,
+  savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
   CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
 
@@ -16,6 +17,8 @@ let expenses = [];
 let budgets = [];
 let investments = [];
 let trades = [];
+let savings = [];
+let savingsTableReady = true;
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
@@ -85,17 +88,29 @@ async function loadTrades() {
   trades = data || [];
 }
 
+// Non-fatal: if the savings table hasn't been migrated in yet, budgets just fall back to
+// tracking expenses only (see schema.sql).
+async function loadSavings() {
+  const { data, error } = await sb.from('savings').select('*');
+  if (error) { savingsTableReady = false; savings = []; return; }
+  savingsTableReady = true;
+  savings = data || [];
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings()]);
 }
 
 function computeProfileStats(profileId) {
   const budgetRow = budgets.find(b => b.profile_id === profileId);
   const budgetAmt = budgetRow ? Number(budgetRow.amount) : 0;
-  const spent = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
+  const spentExpenses = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
+  const savingsSpent = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
+  const investSpent = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
+  const spent = spentExpenses + savingsSpent + investSpent;
   const remaining = budgetAmt - spent;
   const pct = budgetAmt > 0 ? (spent / budgetAmt) * 100 : (spent > 0 ? 101 : 0);
-  return { budgetAmt, spent, remaining, pct, status: statusFor(pct) };
+  return { budgetAmt, spent, spentExpenses, savingsSpent, investSpent, remaining, pct, status: statusFor(pct) };
 }
 
 function filteredExpenses() {
@@ -154,6 +169,14 @@ function renderProfiles() {
     card.className = 'profile-card' + (activeProfileFilter === p.id ? ' selected' : '');
     card.style.setProperty('--accent', p.color);
 
+    const breakdownParts = [];
+    if (s.savingsSpent > 0) breakdownParts.push(`${fmtMoney(s.savingsSpent)} savings`);
+    if (s.investSpent > 0) breakdownParts.push(`${fmtMoney(s.investSpent)} SIP/invest`);
+    const breakdownHtml = breakdownParts.length
+      ? `<div class="profile-breakdown">Incl. ${breakdownParts.join(' + ')} this month</div>`
+      : '';
+    const showLeftoverBtn = s.remaining > 0.004 && !hasLeftoverSaved(p.id);
+
     card.innerHTML = `
       <div class="profile-head">
         <div class="profile-emoji" style="background:${hexToRgba(p.color, 0.15)}">${p.emoji}</div>
@@ -166,14 +189,16 @@ function renderProfiles() {
         </div>
       </div>
       <div class="profile-numbers">
-        <span>Budget: <span class="budget-value" data-action="edit-budget">${s.budgetAmt > 0 ? fmtMoney(s.budgetAmt) : 'set budget'}</span></span>
+        <span>Budget: <span class="budget-value" data-action="edit-budget">${s.budgetAmt > 0 ? fmtMoney(s.budgetAmt) : 'set budget'}</span><button class="budget-adjust-btn" data-action="adjust-budget" title="Add or reduce budget">±</button></span>
         <span class="spent">Spent: ${fmtMoney(s.spent)}</span>
       </div>
+      ${breakdownHtml}
       <div class="progress-track"><div class="progress-fill ${s.status}" style="width:${Math.min(s.pct, 100)}%"></div></div>
       <div class="profile-status-line">
         <span class="status-text ${s.status}">${statusLabel(s.status)}</span>
         <span class="remaining">${s.remaining < 0 ? 'over by ' + fmtMoney(Math.abs(s.remaining)) : fmtMoney(s.remaining) + ' left'}</span>
       </div>
+      ${showLeftoverBtn ? `<button class="link-btn leftover-btn" data-action="save-leftover">🐷 Move ${fmtMoney(s.remaining)} leftover to savings</button>` : ''}
     `;
 
     // rename
@@ -186,6 +211,18 @@ function renderProfiles() {
     card.querySelector('[data-action="edit-budget"]').addEventListener('click', (e) => {
       e.stopPropagation();
       startBudgetEdit(card, p, s.budgetAmt);
+    });
+
+    // budget top-up / reduce
+    card.querySelector('[data-action="adjust-budget"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      startBudgetAdjust(card, p, s.budgetAmt);
+    });
+
+    // move leftover budget to savings
+    card.querySelector('[data-action="save-leftover"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      saveLeftoverToSavings(p, s.remaining);
     });
 
     // profile detail view
@@ -275,6 +312,79 @@ function startBudgetEdit(card, profile, currentAmt) {
     if (e.key === 'Enter') input.blur();
     if (e.key === 'Escape') renderProfiles();
   });
+}
+
+// Add (or, with a negative number, take away) an amount from the existing budget instead of
+// retyping the whole total — for when extra money shows up mid-month, or plans change.
+function startBudgetAdjust(card, profile, currentAmt) {
+  const btn = card.querySelector('[data-action="adjust-budget"]');
+  const wrap = document.createElement('span');
+  wrap.className = 'budget-edit budget-adjust-wrap';
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = '0.01';
+  input.placeholder = '+500 or -200';
+  wrap.appendChild(input);
+  btn.replaceWith(wrap);
+  input.focus();
+
+  const commit = async () => {
+    const delta = parseFloat(input.value);
+    if (!isNaN(delta) && delta !== 0) {
+      const newAmt = Math.max(0, currentAmt + delta);
+      const monthISO = fmtDateISO(currentMonth);
+      const { error } = await sb.from('budgets').upsert(
+        { profile_id: profile.id, month: monthISO, amount: newAmt },
+        { onConflict: 'profile_id,month' }
+      );
+      if (error) { toast('Budget update failed: ' + error.message); }
+      else {
+        toast(delta > 0 ? `Added ${fmtMoney(delta)} to budget` : `Reduced budget by ${fmtMoney(Math.abs(delta))}`);
+        await loadMonthData();
+        renderAll();
+        return;
+      }
+    }
+    renderProfiles();
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') input.blur();
+    if (e.key === 'Escape') renderProfiles();
+  });
+}
+
+// One-click way to bank whatever's left of a profile's budget into Savings, tagged so it never
+// gets offered twice for the same profile+month and never double-counts as new budget spend.
+function leftoverSavingsName(monthISO) { return `Leftover budget — ${monthISO}`; }
+
+function hasLeftoverSaved(profileId) {
+  const name = leftoverSavingsName(fmtDateISO(currentMonth));
+  return savings.some(s => s.profile_id === profileId && s.name === name);
+}
+
+async function saveLeftoverToSavings(profile, remaining) {
+  if (remaining <= 0) return;
+  if (!savingsTableReady) { toast('Run the updated schema.sql to enable savings first'); return; }
+  const monthISO = fmtDateISO(currentMonth);
+  const monthLabel = currentMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+  if (!confirm(`Move ${fmtMoney(remaining)} of ${profile.name}'s unspent ${monthLabel} budget into Savings?`)) return;
+
+  const lastDay = fmtDateISO(new Date(addMonths(currentMonth, 1).getTime() - 86400000));
+  const { error } = await sb.from('savings').insert({
+    profile_id: profile.id,
+    name: leftoverSavingsName(monthISO),
+    amount: remaining,
+    saved_date: lastDay,
+    note: `Unspent budget for ${monthLabel}`,
+    count_in_budget: false,
+  });
+  if (error) { toast('Failed: ' + error.message); return; }
+
+  toast('Leftover moved to savings');
+  await loadSavings();
+  renderAll();
 }
 
 function renderCategoryChart() {
@@ -933,14 +1043,44 @@ function buildScanCard(entry) {
   return card;
 }
 
-function renderScanResults(transactions) {
-  const status = document.getElementById('scanStatus');
+// One profile picker that stamps its choice onto every scanned transaction at once, so a
+// batch of receipts doesn't need picking a profile card-by-card. Individual cards can still
+// be overridden afterward — this just sets the shared starting point.
+function renderScanApplyAllPicker(selectedId) {
+  const picker = document.getElementById('scanApplyAllPicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => applyProfileToAllScanned(p.id));
+    picker.appendChild(btn);
+  });
+}
+
+function applyProfileToAllScanned(profileId) {
+  scanDraft.forEach(entry => { entry.profileId = profileId; });
+  renderScanApplyAllPicker(profileId);
+  renderScanCardsList();
+}
+
+function renderScanCardsList() {
   const results = document.getElementById('scanResults');
   results.innerHTML = '';
+  scanDraft.filter(entry => entry.included).forEach(entry => results.appendChild(buildScanCard(entry)));
+}
+
+function renderScanResults(transactions) {
+  const status = document.getElementById('scanStatus');
+  const applyAllRow = document.getElementById('scanApplyAllRow');
+  document.getElementById('scanResults').innerHTML = '';
 
   if (!transactions.length) {
     status.textContent = 'Nothing recognisable in those images. Try a clearer screenshot.';
     document.getElementById('scanSave').disabled = true;
+    applyAllRow.hidden = true;
     return;
   }
   status.textContent = `Review and edit, then save. ${transactions.length} transaction${transactions.length === 1 ? '' : 's'} found.`;
@@ -986,7 +1126,9 @@ function renderScanResults(transactions) {
     };
   });
 
-  scanDraft.forEach(entry => results.appendChild(buildScanCard(entry)));
+  applyAllRow.hidden = profiles.length < 2;
+  renderScanApplyAllPicker(defaultProfile);
+  renderScanCardsList();
   updateScanSaveLabel();
 }
 

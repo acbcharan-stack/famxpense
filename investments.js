@@ -4,6 +4,7 @@ import {
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
   investmentActualValue, totalActual, groupInvestmentsByCountry,
+  savingsAmountToDate,
 } from './common.js';
 
 let investments = [];
@@ -16,6 +17,7 @@ let savings = [];
 let savingsTableReady = true;
 let editingSavingsId = null;
 let selectedSavingsProfileId = null;
+let currentSavingsMode = 'onetime';
 
 async function loadInvestments() {
   const { data, error } = await sb.from('investments').select('*').order('created_at', { ascending: false });
@@ -127,6 +129,7 @@ function renderInvestmentCard(inv) {
     inv.exit_load_percent != null ? `Exit load ${inv.exit_load_percent}%` : null,
     inv.brokerage_percent != null ? `Brokerage ${inv.brokerage_percent}%` : null,
     inv.brokerage_fee != null ? `Fee ${fmtMoneyCountry(inv.brokerage_fee, country)}` : null,
+    inv.count_in_budget === false ? 'Not budgeted' : null,
   ].filter(Boolean);
   const metaLine = isSip
     ? `SIP ${fmtMoneyCountry(sipRate, country)}/mo since ${dateStr}`
@@ -291,6 +294,7 @@ function openModal(inv) {
   document.getElementById('iExitLoad').value = inv && inv.exit_load_percent != null ? inv.exit_load_percent : '';
   document.getElementById('iBrokeragePercent').value = inv && inv.brokerage_percent != null ? inv.brokerage_percent : '';
   document.getElementById('iBrokerageFee').value = inv && inv.brokerage_fee != null ? inv.brokerage_fee : '';
+  document.getElementById('iCountBudget').checked = inv ? inv.count_in_budget !== false : true;
 
   clearSipChangeRows();
   if (isSip) {
@@ -366,6 +370,7 @@ async function saveInvestment() {
     .map(([date, rate]) => ({ date, rate }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  const countInBudget = document.getElementById('iCountBudget').checked;
   let payload;
 
   if (currentMode === 'sip') {
@@ -397,6 +402,7 @@ async function saveInvestment() {
       start_date: sipHistory[0].date, investment_mode: 'sip', sip_history: sipHistory,
       return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
       brokerage_percent: brokeragePercent, brokerage_fee: brokerageFee,
+      count_in_budget: countInBudget,
     };
   } else {
     const amount = parseFloat(document.getElementById('iAmount').value);
@@ -407,6 +413,7 @@ async function saveInvestment() {
       start_date: startDate, investment_mode: 'lumpsum', sip_history: null,
       return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
       brokerage_percent: brokeragePercent, brokerage_fee: brokerageFee,
+      count_in_budget: countInBudget,
     };
   }
 
@@ -441,24 +448,64 @@ function renderSavingsProfilePicker() {
   });
 }
 
+function setSavingsMode(mode) {
+  currentSavingsMode = mode;
+  document.querySelectorAll('#savingsModeTabs .tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+  document.querySelectorAll('.smode-recurring').forEach(el => { el.hidden = mode !== 'recurring'; });
+  document.querySelectorAll('.smode-onetime').forEach(el => { el.hidden = mode !== 'onetime'; });
+  document.getElementById('sDateLabel').textContent = mode === 'recurring' ? 'Start date' : 'Date';
+}
+
+function addSavingsChangeRow(date = '', amount = '') {
+  const list = document.getElementById('savingsChangesList');
+  const row = document.createElement('div');
+  row.className = 'sip-change-row';
+  row.innerHTML = `
+    <input type="date" class="savingsChangeDate" value="${escapeHtml(date)}" />
+    <input type="number" class="savingsChangeAmount" min="0.01" step="0.01" placeholder="New monthly amount" value="${escapeHtml(String(amount))}" />
+    <button type="button" class="txn-del savingsChangeRemove" title="Remove">✕</button>
+  `;
+  row.querySelector('.savingsChangeRemove').addEventListener('click', () => row.remove());
+  list.appendChild(row);
+}
+
+function clearSavingsChangeRows() {
+  document.getElementById('savingsChangesList').innerHTML = '';
+}
+
+function readSavingsChangeRows() {
+  return Array.from(document.querySelectorAll('#savingsChangesList .sip-change-row')).map(row => ({
+    date: row.querySelector('.savingsChangeDate').value,
+    amount: parseFloat(row.querySelector('.savingsChangeAmount').value),
+  }));
+}
+
 function renderSavingsCard(s) {
   const card = document.createElement('div');
   card.className = 'investment-card';
+  const isRecurring = s.savings_mode === 'recurring';
   const dateStr = new Date(s.saved_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
   const owner = profiles.find(p => p.id === s.profile_id);
-  const title = s.name ? s.name : 'Savings';
+  const title = s.name ? s.name : (isRecurring ? 'Fixed monthly savings' : 'Savings');
+  const metaLine = isRecurring
+    ? `Fixed ${fmtMoney(sipCurrentRate(s.recurring_history))}/mo since ${dateStr}`
+    : `${dateStr}${s.note ? ' · ' + escapeHtml(s.note) : ''}`;
   card.innerHTML = `
     <div class="investment-head">
       <div class="investment-type">
         ${escapeHtml(title)}
+        ${isRecurring ? `<span class="investment-subtype">Monthly</span>` : ''}
+        ${s.count_in_budget === false ? `<span class="investment-subtype">Not budgeted</span>` : ''}
         <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
       </div>
       <button class="txn-del" title="Delete">🗑️</button>
     </div>
     <div class="investment-numbers">
-      <span>Saved: <strong>${fmtMoney(s.amount)}</strong></span>
+      <span>Saved to date: <strong>${fmtMoney(savingsAmountToDate(s))}</strong></span>
     </div>
-    <div class="investment-meta">${dateStr}${s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
+    <div class="investment-meta">${metaLine}${isRecurring && s.note ? ' · ' + escapeHtml(s.note) : ''}</div>
   `;
   card.addEventListener('click', (e) => {
     if (e.target.closest('.txn-del')) return;
@@ -485,7 +532,7 @@ function renderSavings() {
     return;
   }
 
-  const sumFor = rows => rows.reduce((a, r) => a + Number(r.amount || 0), 0);
+  const sumFor = rows => rows.reduce((a, r) => a + savingsAmountToDate(r), 0);
   const total = sumFor(savings);
   const perProfile = profiles
     .map(p => ({ p, amt: sumFor(savings.filter(s => s.profile_id === p.id)) }))
@@ -519,13 +566,29 @@ function renderSavings() {
 
 function openSavingsModal(s) {
   editingSavingsId = s ? s.id : null;
+  const isRecurring = s && s.savings_mode === 'recurring';
   selectedSavingsProfileId = s ? (s.profile_id || null) : (profiles[0]?.id || null);
   renderSavingsProfilePicker();
   document.getElementById('savingsModalTitle').textContent = s ? 'Edit savings' : 'Add savings';
   document.getElementById('sName').value = s ? (s.name || '') : '';
-  document.getElementById('sAmount').value = s ? s.amount : '';
   document.getElementById('sDate').value = s ? s.saved_date : fmtDateISO(new Date());
   document.getElementById('sNote').value = s ? (s.note || '') : '';
+  document.getElementById('sCountBudget').checked = s ? s.count_in_budget !== false : true;
+
+  clearSavingsChangeRows();
+  if (isRecurring) {
+    const history = [...(s.recurring_history || [])].sort((a, b) => a.date.localeCompare(b.date));
+    document.getElementById('sAmount').value = '';
+    document.getElementById('sRecurringAmount').value = history.length ? history[0].amount : '';
+    document.getElementById('sTopup').value = s.amount || '';
+    history.slice(1).forEach(h => addSavingsChangeRow(h.date, h.amount));
+  } else {
+    document.getElementById('sAmount').value = s ? s.amount : '';
+    document.getElementById('sRecurringAmount').value = '';
+    document.getElementById('sTopup').value = '';
+  }
+
+  setSavingsMode(isRecurring ? 'recurring' : 'onetime');
   document.getElementById('savingsModalOverlay').classList.add('open');
 }
 
@@ -535,21 +598,62 @@ function closeSavingsModal() {
 
 async function saveSavings() {
   const name = document.getElementById('sName').value.trim();
-  const amount = parseFloat(document.getElementById('sAmount').value);
   const savedDate = document.getElementById('sDate').value;
   const note = document.getElementById('sNote').value.trim();
+  const countInBudget = document.getElementById('sCountBudget').checked;
 
   if (!selectedSavingsProfileId) { toast('Pick a profile'); return; }
-  if (isNaN(amount) || amount <= 0) { toast('Enter a valid amount'); return; }
   if (!savedDate) { toast('Pick a date'); return; }
 
-  const payload = {
-    profile_id: selectedSavingsProfileId,
-    name: name || null,
-    amount,
-    saved_date: savedDate,
-    note: note || null,
-  };
+  let payload;
+
+  if (currentSavingsMode === 'recurring') {
+    const monthlyAmount = parseFloat(document.getElementById('sRecurringAmount').value);
+    if (isNaN(monthlyAmount) || monthlyAmount <= 0) { toast('Enter a valid monthly savings amount'); return; }
+
+    const topupRaw = document.getElementById('sTopup').value;
+    const topup = topupRaw === '' ? 0 : parseFloat(topupRaw);
+    if (isNaN(topup) || topup < 0) { toast('Enter a valid extra amount, or leave it blank'); return; }
+
+    const changeRows = readSavingsChangeRows();
+    for (const row of changeRows) {
+      if (!row.date || isNaN(row.amount) || row.amount <= 0) {
+        toast('Each amount change needs a date and a valid amount');
+        return;
+      }
+    }
+
+    const historyMap = new Map();
+    historyMap.set(savedDate, monthlyAmount);
+    changeRows.forEach(row => historyMap.set(row.date, row.amount));
+    const recurringHistory = [...historyMap.entries()]
+      .map(([date, amount]) => ({ date, amount }))
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    payload = {
+      profile_id: selectedSavingsProfileId,
+      name: name || null,
+      amount: topup,
+      saved_date: recurringHistory[0].date,
+      savings_mode: 'recurring',
+      recurring_history: recurringHistory,
+      note: note || null,
+      count_in_budget: countInBudget,
+    };
+  } else {
+    const amount = parseFloat(document.getElementById('sAmount').value);
+    if (isNaN(amount) || amount <= 0) { toast('Enter a valid amount'); return; }
+    payload = {
+      profile_id: selectedSavingsProfileId,
+      name: name || null,
+      amount,
+      saved_date: savedDate,
+      savings_mode: 'onetime',
+      recurring_history: null,
+      note: note || null,
+      count_in_budget: countInBudget,
+    };
+  }
 
   const { error } = editingSavingsId
     ? await sb.from('savings').update(payload).eq('id', editingSavingsId)
@@ -606,6 +710,10 @@ async function init() {
   document.getElementById('savingsModalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'savingsModalOverlay') closeSavingsModal();
   });
+  document.querySelectorAll('#savingsModeTabs .tab').forEach(btn => {
+    btn.addEventListener('click', () => setSavingsMode(btn.dataset.mode));
+  });
+  document.getElementById('addSavingsChangeBtn').addEventListener('click', () => addSavingsChangeRow());
 
   try {
     await Promise.all([loadInvestments(), loadProfiles(), loadSavings()]);

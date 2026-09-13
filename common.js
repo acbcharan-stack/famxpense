@@ -452,6 +452,69 @@ export function stopLossInfo(trade) {
   return { amount, percent };
 }
 
+// ---------- savings ----------
+
+// Total saved so far for one savings row: for a recurring ("fixed monthly") plan, the optional
+// one-time top-up plus everything the recurring schedule has contributed to date; for a
+// one-time entry, just its amount. Mirrors investedAmount()'s SIP-vs-lumpsum split.
+export function savingsAmountToDate(s, asOf = new Date()) {
+  if (s.savings_mode === 'recurring') {
+    return (Number(s.amount) || 0) + sipInvestedToDate(s.recurring_history, asOf);
+  }
+  return Number(s.amount) || 0;
+}
+
+export function sumSavings(savingsRows, asOf = new Date()) {
+  return savingsRows.reduce((s, r) => s + savingsAmountToDate(r, asOf), 0);
+}
+
+// How much of `monthStart`'s calendar month should count as "spent" against budget for these
+// savings rows: a one-time entry counts in the month of its saved_date; a recurring plan counts
+// its installment for that month (once it has started), using whatever rate was in effect by
+// month's end. Rows with count_in_budget === false (extra money, not from the regular budget)
+// never count.
+export function savingsMonthlyBudgetImpact(savingsRows, monthStart) {
+  const monthEnd = addMonths(monthStart, 1);
+  const monthStartISO = fmtDateISO(monthStart);
+  const monthEndISO = fmtDateISO(monthEnd);
+  const lastInstant = new Date(monthEnd.getTime() - 1);
+
+  return savingsRows.reduce((sum, s) => {
+    if (s.count_in_budget === false) return sum;
+    if (s.savings_mode === 'recurring') {
+      const history = Array.isArray(s.recurring_history) ? s.recurring_history : [];
+      if (!history.length) return sum;
+      const firstDate = new Date([...history].sort((a, b) => a.date.localeCompare(b.date))[0].date + 'T00:00:00');
+      if (firstDate >= monthEnd) return sum;
+      return sum + sipCurrentRate(history, lastInstant);
+    }
+    return (s.saved_date >= monthStartISO && s.saved_date < monthEndISO) ? sum + (Number(s.amount) || 0) : sum;
+  }, 0);
+}
+
+// Same idea as savingsMonthlyBudgetImpact but for investments: a lump sum counts its amount in
+// its start month, a SIP counts its current installment for any month from its start onward.
+// Rows with count_in_budget === false never count.
+export function investmentMonthlyBudgetImpact(inv, monthStart) {
+  if (inv.count_in_budget === false) return 0;
+  const monthEnd = addMonths(monthStart, 1);
+
+  if (inv.investment_mode === 'sip') {
+    const history = Array.isArray(inv.sip_history) ? inv.sip_history : [];
+    if (!history.length) return 0;
+    const firstDate = new Date([...history].sort((a, b) => a.date.localeCompare(b.date))[0].date + 'T00:00:00');
+    if (firstDate >= monthEnd) return 0;
+    return sipCurrentRate(history, new Date(monthEnd.getTime() - 1));
+  }
+
+  const start = new Date(inv.start_date + 'T00:00:00');
+  return (start >= monthStart && start < monthEnd) ? (Number(inv.amount) || 0) : 0;
+}
+
+export function investmentsMonthlyBudgetImpact(investments, monthStart) {
+  return investments.reduce((s, inv) => s + investmentMonthlyBudgetImpact(inv, monthStart), 0);
+}
+
 // Realized P&L across every closed trade, plus a win rate (share that hit their target %).
 // ---------- goals ----------
 

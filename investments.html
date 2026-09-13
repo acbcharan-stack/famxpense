@@ -153,6 +153,11 @@
       <div class="field-hint" id="brokerageHint">Both are subtracted from the projected value to show what you'd actually walk away with.</div>
     </div>
 
+    <div class="exit-toggle-row" id="investCountBudgetRow">
+      <input type="checkbox" id="iCountBudget" checked />
+      <label for="iCountBudget">Count this against the monthly budget (uncheck for extra money that isn't part of the regular budget)</label>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" id="investModalCancel">Cancel</button>
       <button class="btn btn-primary" id="investModalSave">Save</button>
@@ -172,17 +177,48 @@
       <input type="text" id="sName" placeholder="e.g. Emergency fund" />
     </div>
     <div class="field">
-      <label for="sAmount">Amount saved</label>
+      <label id="savingsModeLabel">How are you saving this?</label>
+      <div class="tabs" id="savingsModeTabs">
+        <button type="button" class="tab active" data-mode="onetime">One-time</button>
+        <button type="button" class="tab" data-mode="recurring">Fixed monthly</button>
+      </div>
+    </div>
+
+    <div class="field smode-onetime">
+      <label for="sAmount" id="sAmountLabel">Amount saved</label>
       <input type="number" id="sAmount" min="0" step="0.01" placeholder="0.00" />
     </div>
+
+    <div class="field smode-recurring" hidden>
+      <label for="sRecurringAmount">Fixed monthly savings amount</label>
+      <input type="number" id="sRecurringAmount" min="0.01" step="0.01" placeholder="e.g. 1000" />
+    </div>
+
     <div class="field">
-      <label for="sDate">Date</label>
+      <label for="sDate" id="sDateLabel">Date</label>
       <input type="date" id="sDate" />
     </div>
+
+    <div class="field smode-recurring" hidden>
+      <div id="savingsChangesList"></div>
+      <button type="button" class="btn btn-ghost btn-sm" id="addSavingsChangeBtn">+ Amount changed on a later date</button>
+    </div>
+
+    <div class="field smode-recurring" hidden>
+      <label for="sTopup">Extra amount saved outside the monthly plan (optional)</label>
+      <input type="number" id="sTopup" min="0" step="0.01" placeholder="e.g. one-time top-up" />
+    </div>
+
     <div class="field">
       <label for="sNote">Note (optional)</label>
       <input type="text" id="sNote" placeholder="e.g. moved from salary" />
     </div>
+
+    <div class="exit-toggle-row" id="savingsCountBudgetRow">
+      <input type="checkbox" id="sCountBudget" checked />
+      <label for="sCountBudget">Count this against the monthly budget (uncheck for extra money that isn't part of the regular budget)</label>
+    </div>
+
     <div class="modal-actions">
       <button class="btn btn-ghost" id="savingsModalCancel">Cancel</button>
       <button class="btn btn-primary" id="savingsModalSave">Save</button>
