@@ -195,3 +195,20 @@ create index if not exists savings_profile_idx on savings (profile_id);
 alter table savings enable row level security;
 drop policy if exists "family only savings" on savings;
 create policy "family only savings" on savings for all using (is_family_member()) with check (is_family_member());
+
+-- Bank balance record: purely for reference (never feeds budgets or totals). One row per
+-- profile per month — the amount in that person's bank account at the start and at the end.
+-- (The app only shows this for the "Charan" profile.)
+create table if not exists bank_balances (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  month date not null,
+  opening_balance numeric(14,2),
+  closing_balance numeric(14,2),
+  created_at timestamptz not null default now(),
+  unique (profile_id, month)
+);
+
+alter table bank_balances enable row level security;
+drop policy if exists "family only bank_balances" on bank_balances;
+create policy "family only bank_balances" on bank_balances for all using (is_family_member()) with check (is_family_member());

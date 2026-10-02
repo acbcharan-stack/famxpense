@@ -5,7 +5,6 @@ import {
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
   tradesSummary, goalProgress,
-  savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
   CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
 
@@ -19,6 +18,8 @@ let investments = [];
 let trades = [];
 let savings = [];
 let savingsTableReady = true;
+let bankBalance = null;
+let bankTableReady = true;
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
@@ -97,20 +98,35 @@ async function loadSavings() {
   savings = data || [];
 }
 
+// Non-fatal: if the bank_balances table hasn't been created yet the rest of the page still works.
+// Bank balance is only tracked for the Charan profile.
+function bankProfile() {
+  return profiles.find(p => /charan/i.test(p.name)) || null;
+}
+
+async function loadBankBalance() {
+  const owner = bankProfile();
+  if (!owner) { bankBalance = null; return; }
+  const { data, error } = await sb.from('bank_balances').select('*')
+    .eq('profile_id', owner.id).eq('month', fmtDateISO(currentMonth)).maybeSingle();
+  if (error) { bankTableReady = false; bankBalance = null; return; }
+  bankTableReady = true;
+  bankBalance = data || null;
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings(), loadBankBalance()]);
 }
 
 function computeProfileStats(profileId) {
   const budgetRow = budgets.find(b => b.profile_id === profileId);
   const budgetAmt = budgetRow ? Number(budgetRow.amount) : 0;
   const spentExpenses = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
-  const savingsSpent = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
-  const investSpent = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
-  const spent = spentExpenses + savingsSpent + investSpent;
+  // "Spent" is only the expenses added — savings and investments are tracked on their own pages.
+  const spent = spentExpenses;
   const remaining = budgetAmt - spent;
   const pct = budgetAmt > 0 ? (spent / budgetAmt) * 100 : (spent > 0 ? 101 : 0);
-  return { budgetAmt, spent, spentExpenses, savingsSpent, investSpent, remaining, pct, status: statusFor(pct) };
+  return { budgetAmt, spent, spentExpenses, remaining, pct, status: statusFor(pct) };
 }
 
 function filteredExpenses() {
@@ -159,6 +175,56 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
+function renderBankBalance() {
+  const owner = bankProfile();
+  document.getElementById('bankTitle').hidden = !owner;
+  document.getElementById('bankCard').hidden = !owner;
+  if (!owner) return;
+  document.getElementById('bankOwner').textContent = `${owner.name} — for your records only`;
+  const opening = document.getElementById('bankOpening');
+  const closing = document.getElementById('bankClosing');
+  const hint = document.getElementById('bankHint');
+  const saveBtn = document.getElementById('bankSaveBtn');
+  opening.disabled = closing.disabled = saveBtn.disabled = !bankTableReady;
+  opening.value = bankBalance?.opening_balance ?? '';
+  closing.value = bankBalance?.closing_balance ?? '';
+  if (!bankTableReady) {
+    hint.textContent = 'Run the bank_balances block at the end of schema.sql in the Supabase SQL editor, then reload.';
+    return;
+  }
+  const o = bankBalance?.opening_balance, c = bankBalance?.closing_balance;
+  if (o != null && c != null) {
+    const diff = Number(c) - Number(o);
+    hint.textContent = diff === 0 ? 'No change over the month.'
+      : `${diff > 0 ? 'Up' : 'Down'} ${fmtMoney(Math.abs(diff))} over the month.`;
+  } else {
+    hint.textContent = '';
+  }
+}
+
+async function saveBankBalance() {
+  const owner = bankProfile();
+  if (!owner) return;
+  const parse = id => {
+    const raw = document.getElementById(id).value;
+    return raw === '' ? null : parseFloat(raw);
+  };
+  const opening = parse('bankOpening');
+  const closing = parse('bankClosing');
+  if ((opening != null && isNaN(opening)) || (closing != null && isNaN(closing))) {
+    toast('Enter valid amounts');
+    return;
+  }
+  const { error } = await sb.from('bank_balances').upsert(
+    { profile_id: owner.id, month: fmtDateISO(currentMonth), opening_balance: opening, closing_balance: closing },
+    { onConflict: 'profile_id,month' }
+  );
+  if (error) { toast('Save failed: ' + error.message); return; }
+  toast('Bank balance saved');
+  await loadBankBalance();
+  renderBankBalance();
+}
+
 function renderProfiles() {
   const grid = document.getElementById('profileGrid');
   grid.innerHTML = '';
@@ -169,12 +235,6 @@ function renderProfiles() {
     card.className = 'profile-card' + (activeProfileFilter === p.id ? ' selected' : '');
     card.style.setProperty('--accent', p.color);
 
-    const breakdownParts = [];
-    if (s.savingsSpent > 0) breakdownParts.push(`${fmtMoney(s.savingsSpent)} savings`);
-    if (s.investSpent > 0) breakdownParts.push(`${fmtMoney(s.investSpent)} SIP/invest`);
-    const breakdownHtml = breakdownParts.length
-      ? `<div class="profile-breakdown">Incl. ${breakdownParts.join(' + ')} this month</div>`
-      : '';
     const showLeftoverBtn = s.remaining > 0.004 && !hasLeftoverSaved(p.id);
 
     card.innerHTML = `
@@ -192,7 +252,6 @@ function renderProfiles() {
         <span>Budget: <span class="budget-value" data-action="edit-budget">${s.budgetAmt > 0 ? fmtMoney(s.budgetAmt) : 'set budget'}</span><button class="budget-adjust-btn" data-action="adjust-budget" title="Add or reduce budget">±</button></span>
         <span class="spent">Spent: ${fmtMoney(s.spent)}</span>
       </div>
-      ${breakdownHtml}
       <div class="progress-track"><div class="progress-fill ${s.status}" style="width:${Math.min(s.pct, 100)}%"></div></div>
       <div class="profile-status-line">
         <span class="status-text ${s.status}">${statusLabel(s.status)}</span>
@@ -587,6 +646,7 @@ function updateCustomProjection() {
 function renderAll() {
   renderMonthLabel();
   renderStats();
+  renderBankBalance();
   renderProfiles();
   renderCategoryChart();
   renderTrendChart();
@@ -1296,6 +1356,7 @@ async function init() {
     renderAll();
   });
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
+  document.getElementById('bankSaveBtn').addEventListener('click', saveBankBalance);
   document.getElementById('fabAdd').addEventListener('click', openModal);
   document.getElementById('modalCancel').addEventListener('click', closeModal);
   document.getElementById('modalSave').addEventListener('click', saveExpense);
