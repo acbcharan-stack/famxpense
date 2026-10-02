@@ -1329,27 +1329,21 @@ html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
 }
 
 /* ---------- bank balance ---------- */
-.bank-card {
-  display: flex;
-  align-items: flex-end;
-  gap: 12px;
-  flex-wrap: wrap;
-  background: var(--surface-1);
-  border: 1px solid var(--border);
-  border-radius: 14px;
-  padding: 14px 18px;
-  margin-bottom: 12px;
-}
-.bank-card[hidden], #bankTitle[hidden] { display: none; }
-.bank-field { display: flex; flex-direction: column; gap: 4px; flex: 1 1 140px; }
-.bank-field label { color: var(--text-secondary); font-size: 0.8rem; font-weight: 600; }
+.bank-section { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border); cursor: default; }
+.bank-title { font-size: 0.8rem; font-weight: 700; margin-bottom: 6px; }
+.bank-sub { color: var(--text-secondary); font-weight: 500; }
+.bank-card { display: flex; align-items: flex-end; gap: 8px; flex-wrap: wrap; }
+.bank-field { display: flex; flex-direction: column; gap: 3px; flex: 1 1 90px; min-width: 0; }
+.bank-field label { color: var(--text-secondary); font-size: 0.72rem; font-weight: 600; }
 .bank-field input {
-  padding: 8px 10px;
+  width: 100%;
+  padding: 6px 8px;
   border-radius: 8px;
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-primary);
   font: inherit;
+  font-size: 0.85rem;
   font-variant-numeric: tabular-nums;
 }
 .bank-card .field-hint { flex-basis: 100%; margin: 0; }

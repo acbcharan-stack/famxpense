@@ -18,7 +18,7 @@ let investments = [];
 let trades = [];
 let savings = [];
 let savingsTableReady = true;
-let bankBalance = null;
+let bankBalances = [];
 let bankTableReady = true;
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
@@ -99,19 +99,11 @@ async function loadSavings() {
 }
 
 // Non-fatal: if the bank_balances table hasn't been created yet the rest of the page still works.
-// Bank balance is only tracked for the Charan profile.
-function bankProfile() {
-  return profiles.find(p => /charan/i.test(p.name)) || null;
-}
-
 async function loadBankBalance() {
-  const owner = bankProfile();
-  if (!owner) { bankBalance = null; return; }
-  const { data, error } = await sb.from('bank_balances').select('*')
-    .eq('profile_id', owner.id).eq('month', fmtDateISO(currentMonth)).maybeSingle();
-  if (error) { bankTableReady = false; bankBalance = null; return; }
+  const { data, error } = await sb.from('bank_balances').select('*').eq('month', fmtDateISO(currentMonth));
+  if (error) { bankTableReady = false; bankBalances = []; return; }
   bankTableReady = true;
-  bankBalance = data || null;
+  bankBalances = data || [];
 }
 
 async function loadAllData() {
@@ -175,54 +167,55 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
-function renderBankBalance() {
-  const owner = bankProfile();
-  document.getElementById('bankTitle').hidden = !owner;
-  document.getElementById('bankCard').hidden = !owner;
-  if (!owner) return;
-  document.getElementById('bankOwner').textContent = `${owner.name} — for your records only`;
-  const opening = document.getElementById('bankOpening');
-  const closing = document.getElementById('bankClosing');
-  const hint = document.getElementById('bankHint');
-  const saveBtn = document.getElementById('bankSaveBtn');
-  opening.disabled = closing.disabled = saveBtn.disabled = !bankTableReady;
-  opening.value = bankBalance?.opening_balance ?? '';
-  closing.value = bankBalance?.closing_balance ?? '';
-  if (!bankTableReady) {
-    hint.textContent = 'Run the bank_balances block at the end of schema.sql in the Supabase SQL editor, then reload.';
-    return;
-  }
-  const o = bankBalance?.opening_balance, c = bankBalance?.closing_balance;
-  if (o != null && c != null) {
-    const diff = Number(c) - Number(o);
-    hint.textContent = diff === 0 ? 'No change over the month.'
-      : `${diff > 0 ? 'Up' : 'Down'} ${fmtMoney(Math.abs(diff))} over the month.`;
-  } else {
-    hint.textContent = '';
-  }
+function bankHintText(row) {
+  if (!bankTableReady) return 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.';
+  const o = row?.opening_balance, c = row?.closing_balance;
+  if (o == null || c == null) return '';
+  const diff = Number(c) - Number(o);
+  return diff === 0 ? 'No change over the month.' : `${diff > 0 ? 'Up' : 'Down'} ${fmtMoney(Math.abs(diff))} over the month.`;
 }
 
-async function saveBankBalance() {
-  const owner = bankProfile();
-  if (!owner) return;
-  const parse = id => {
-    const raw = document.getElementById(id).value;
+// Per-profile start/end-of-month bank balance — a reference record only, never part of budgets.
+function bankSectionHtml(profileId) {
+  const row = bankBalances.find(b => b.profile_id === profileId);
+  const dis = bankTableReady ? '' : 'disabled';
+  return `
+    <div class="bank-section">
+      <div class="bank-title">🏦 Bank balance <span class="bank-sub">for your records</span></div>
+      <div class="bank-card">
+        <div class="bank-field">
+          <label>Start of month</label>
+          <input type="number" step="0.01" class="bank-opening" placeholder="Amount" value="${row?.opening_balance ?? ''}" ${dis} />
+        </div>
+        <div class="bank-field">
+          <label>End of month</label>
+          <input type="number" step="0.01" class="bank-closing" placeholder="Amount" value="${row?.closing_balance ?? ''}" ${dis} />
+        </div>
+        <button class="btn btn-primary btn-sm bank-save" ${dis}>Save</button>
+        <div class="field-hint bank-hint">${bankHintText(row)}</div>
+      </div>
+    </div>`;
+}
+
+async function saveBankBalance(profile, card) {
+  const parse = sel => {
+    const raw = card.querySelector(sel).value;
     return raw === '' ? null : parseFloat(raw);
   };
-  const opening = parse('bankOpening');
-  const closing = parse('bankClosing');
+  const opening = parse('.bank-opening');
+  const closing = parse('.bank-closing');
   if ((opening != null && isNaN(opening)) || (closing != null && isNaN(closing))) {
     toast('Enter valid amounts');
     return;
   }
   const { error } = await sb.from('bank_balances').upsert(
-    { profile_id: owner.id, month: fmtDateISO(currentMonth), opening_balance: opening, closing_balance: closing },
+    { profile_id: profile.id, month: fmtDateISO(currentMonth), opening_balance: opening, closing_balance: closing },
     { onConflict: 'profile_id,month' }
   );
   if (error) { toast('Save failed: ' + error.message); return; }
-  toast('Bank balance saved');
+  toast(`${profile.name}'s bank balance saved`);
   await loadBankBalance();
-  renderBankBalance();
+  renderProfiles();
 }
 
 function renderProfiles() {
@@ -258,7 +251,13 @@ function renderProfiles() {
         <span class="remaining">${s.remaining < 0 ? 'over by ' + fmtMoney(Math.abs(s.remaining)) : fmtMoney(s.remaining) + ' left'}</span>
       </div>
       ${showLeftoverBtn ? `<button class="link-btn leftover-btn" data-action="save-leftover">🐷 Move ${fmtMoney(s.remaining)} leftover to savings</button>` : ''}
+      ${bankSectionHtml(p.id)}
     `;
+
+    // bank balance: keep clicks inside from selecting the profile filter
+    const bankSection = card.querySelector('.bank-section');
+    bankSection.addEventListener('click', (e) => e.stopPropagation());
+    card.querySelector('.bank-save').addEventListener('click', () => saveBankBalance(p, card));
 
     // rename
     card.querySelector('[data-action="rename"]').addEventListener('click', (e) => {
@@ -646,7 +645,6 @@ function updateCustomProjection() {
 function renderAll() {
   renderMonthLabel();
   renderStats();
-  renderBankBalance();
   renderProfiles();
   renderCategoryChart();
   renderTrendChart();
@@ -1356,7 +1354,6 @@ async function init() {
     renderAll();
   });
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
-  document.getElementById('bankSaveBtn').addEventListener('click', saveBankBalance);
   document.getElementById('fabAdd').addEventListener('click', openModal);
   document.getElementById('modalCancel').addEventListener('click', closeModal);
   document.getElementById('modalSave').addEventListener('click', saveExpense);
