@@ -4,7 +4,7 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet" />
-<title>Savings & Investments — Family Expense Tracker</title>
+<title>Investments — Family Expense Tracker</title>
 <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
@@ -17,7 +17,7 @@
   <div class="topbar">
     <div class="topbar-left">
       <button class="icon-btn menu-toggle" id="menuToggle" aria-label="Open menu">☰</button>
-      <h1>💰 Savings & Investments</h1>
+      <h1>💰 Investments</h1>
     </div>
     <div style="display:flex; align-items:center; gap:10px;">
       <button class="icon-btn" id="themeToggle" title="Toggle dark mode">🌙</button>
@@ -25,16 +25,19 @@
   </div>
 
   <div class="section-title">Projected value</div>
-  <div class="stat-row" id="investStatRow"></div>
   <div class="invest-custom-row">
-    <label for="investCustomYears">Projected value in</label>
+    <label for="investCustomYears">Also show a custom horizon of</label>
     <input type="number" id="investCustomYears" min="1" max="60" value="15" />
-    <label for="investCustomYears">years</label>
-    <strong id="investCustomValue">₹0</strong>
+    <label for="investCustomYears">years, below</label>
   </div>
+  <div class="invest-empty-note" id="investGroupsEmpty" style="display:none;">No investments yet. Tap + to add one.</div>
+  <div id="investGroups"></div>
 
-  <div class="section-title">Your investments</div>
-  <div class="invest-list" id="investList"><div class="empty-note">Loading…</div></div>
+  <div class="section-title">🇮🇳 National Invest <span class="investment-subtype">India</span></div>
+  <div class="invest-list" id="investListNational"><div class="empty-note">Loading…</div></div>
+
+  <div class="section-title">🌍 Global Invest <span class="investment-subtype">Outside India</span></div>
+  <div class="invest-list" id="investListGlobal"><div class="empty-note">Loading…</div></div>
 
 </div>
   </div>
@@ -109,6 +112,43 @@
       <div id="returnChangesList"></div>
       <button type="button" class="btn btn-ghost btn-sm" id="addReturnChangeBtn">+ Return rate updated on a later date</button>
       <div class="field-hint" id="returnAvgHint"></div>
+    </div>
+
+    <div class="field">
+      <label for="iCountry">Country</label>
+      <select id="iCountry">
+        <option value="India">🇮🇳 India</option>
+        <option value="United States">🇺🇸 United States</option>
+        <option value="United Kingdom">🇬🇧 United Kingdom</option>
+        <option value="Canada">🇨🇦 Canada</option>
+        <option value="Australia">🇦🇺 Australia</option>
+        <option value="Singapore">🇸🇬 Singapore</option>
+        <option value="United Arab Emirates">🇦🇪 United Arab Emirates</option>
+        <option value="Germany">🇩🇪 Germany</option>
+        <option value="Japan">🇯🇵 Japan</option>
+        <option value="Switzerland">🇨🇭 Switzerland</option>
+      </select>
+    </div>
+
+    <div class="field">
+      <label for="iExitLoad">Exit load (%) (optional)</label>
+      <input type="number" id="iExitLoad" min="0" step="0.01" placeholder="e.g. 1 (if redeemed within the lock-in)" />
+    </div>
+
+    <div class="field">
+      <label for="iBrokeragePercent">Brokerage (%) (optional)</label>
+      <input type="number" id="iBrokeragePercent" min="0" step="0.01" placeholder="e.g. 0.5" />
+    </div>
+
+    <div class="field">
+      <label for="iBrokerageFee">Brokerage fee, flat (optional)</label>
+      <input type="number" id="iBrokerageFee" min="0" step="0.01" placeholder="e.g. 20" />
+      <div class="field-hint" id="brokerageHint">Both are subtracted from the projected value to show what you'd actually walk away with.</div>
+    </div>
+
+    <div class="exit-toggle-row" id="investCountBudgetRow">
+      <input type="checkbox" id="iCountBudget" checked />
+      <label for="iCountBudget">Count this against the monthly budget (uncheck for extra money that isn't part of the regular budget)</label>
     </div>
 
     <div class="modal-actions">

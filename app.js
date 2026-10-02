@@ -5,9 +5,11 @@ import {
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
   tradesSummary, goalProgress,
+  savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
+  CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
 
-const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
+const MAX_SCAN_IMAGES = 5;
 
 let profiles = [];
 let currentMonth = startOfMonth(new Date());
@@ -15,10 +17,13 @@ let expenses = [];
 let budgets = [];
 let investments = [];
 let trades = [];
+let savings = [];
+let savingsTableReady = true;
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
 let goalModalProfile = null;
+let scanDraft = [];
 
 const TREND_MONTHS = 6;
 let trendExpenses = [];
@@ -83,17 +88,29 @@ async function loadTrades() {
   trades = data || [];
 }
 
+// Non-fatal: if the savings table hasn't been migrated in yet, budgets just fall back to
+// tracking expenses only (see schema.sql).
+async function loadSavings() {
+  const { data, error } = await sb.from('savings').select('*');
+  if (error) { savingsTableReady = false; savings = []; return; }
+  savingsTableReady = true;
+  savings = data || [];
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings()]);
 }
 
 function computeProfileStats(profileId) {
   const budgetRow = budgets.find(b => b.profile_id === profileId);
   const budgetAmt = budgetRow ? Number(budgetRow.amount) : 0;
-  const spent = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
+  const spentExpenses = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
+  const savingsSpent = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
+  const investSpent = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
+  const spent = spentExpenses + savingsSpent + investSpent;
   const remaining = budgetAmt - spent;
   const pct = budgetAmt > 0 ? (spent / budgetAmt) * 100 : (spent > 0 ? 101 : 0);
-  return { budgetAmt, spent, remaining, pct, status: statusFor(pct) };
+  return { budgetAmt, spent, spentExpenses, savingsSpent, investSpent, remaining, pct, status: statusFor(pct) };
 }
 
 function filteredExpenses() {
@@ -152,6 +169,14 @@ function renderProfiles() {
     card.className = 'profile-card' + (activeProfileFilter === p.id ? ' selected' : '');
     card.style.setProperty('--accent', p.color);
 
+    const breakdownParts = [];
+    if (s.savingsSpent > 0) breakdownParts.push(`${fmtMoney(s.savingsSpent)} savings`);
+    if (s.investSpent > 0) breakdownParts.push(`${fmtMoney(s.investSpent)} SIP/invest`);
+    const breakdownHtml = breakdownParts.length
+      ? `<div class="profile-breakdown">Incl. ${breakdownParts.join(' + ')} this month</div>`
+      : '';
+    const showLeftoverBtn = s.remaining > 0.004 && !hasLeftoverSaved(p.id);
+
     card.innerHTML = `
       <div class="profile-head">
         <div class="profile-emoji" style="background:${hexToRgba(p.color, 0.15)}">${p.emoji}</div>
@@ -164,14 +189,16 @@ function renderProfiles() {
         </div>
       </div>
       <div class="profile-numbers">
-        <span>Budget: <span class="budget-value" data-action="edit-budget">${s.budgetAmt > 0 ? fmtMoney(s.budgetAmt) : 'set budget'}</span></span>
+        <span>Budget: <span class="budget-value" data-action="edit-budget">${s.budgetAmt > 0 ? fmtMoney(s.budgetAmt) : 'set budget'}</span><button class="budget-adjust-btn" data-action="adjust-budget" title="Add or reduce budget">±</button></span>
         <span class="spent">Spent: ${fmtMoney(s.spent)}</span>
       </div>
+      ${breakdownHtml}
       <div class="progress-track"><div class="progress-fill ${s.status}" style="width:${Math.min(s.pct, 100)}%"></div></div>
       <div class="profile-status-line">
         <span class="status-text ${s.status}">${statusLabel(s.status)}</span>
         <span class="remaining">${s.remaining < 0 ? 'over by ' + fmtMoney(Math.abs(s.remaining)) : fmtMoney(s.remaining) + ' left'}</span>
       </div>
+      ${showLeftoverBtn ? `<button class="link-btn leftover-btn" data-action="save-leftover">🐷 Move ${fmtMoney(s.remaining)} leftover to savings</button>` : ''}
     `;
 
     // rename
@@ -184,6 +211,18 @@ function renderProfiles() {
     card.querySelector('[data-action="edit-budget"]').addEventListener('click', (e) => {
       e.stopPropagation();
       startBudgetEdit(card, p, s.budgetAmt);
+    });
+
+    // budget top-up / reduce
+    card.querySelector('[data-action="adjust-budget"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      startBudgetAdjust(card, p, s.budgetAmt);
+    });
+
+    // move leftover budget to savings
+    card.querySelector('[data-action="save-leftover"]')?.addEventListener('click', (e) => {
+      e.stopPropagation();
+      saveLeftoverToSavings(p, s.remaining);
     });
 
     // profile detail view
@@ -273,6 +312,79 @@ function startBudgetEdit(card, profile, currentAmt) {
     if (e.key === 'Enter') input.blur();
     if (e.key === 'Escape') renderProfiles();
   });
+}
+
+// Add (or, with a negative number, take away) an amount from the existing budget instead of
+// retyping the whole total — for when extra money shows up mid-month, or plans change.
+function startBudgetAdjust(card, profile, currentAmt) {
+  const btn = card.querySelector('[data-action="adjust-budget"]');
+  const wrap = document.createElement('span');
+  wrap.className = 'budget-edit budget-adjust-wrap';
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = '0.01';
+  input.placeholder = '+500 or -200';
+  wrap.appendChild(input);
+  btn.replaceWith(wrap);
+  input.focus();
+
+  const commit = async () => {
+    const delta = parseFloat(input.value);
+    if (!isNaN(delta) && delta !== 0) {
+      const newAmt = Math.max(0, currentAmt + delta);
+      const monthISO = fmtDateISO(currentMonth);
+      const { error } = await sb.from('budgets').upsert(
+        { profile_id: profile.id, month: monthISO, amount: newAmt },
+        { onConflict: 'profile_id,month' }
+      );
+      if (error) { toast('Budget update failed: ' + error.message); }
+      else {
+        toast(delta > 0 ? `Added ${fmtMoney(delta)} to budget` : `Reduced budget by ${fmtMoney(Math.abs(delta))}`);
+        await loadMonthData();
+        renderAll();
+        return;
+      }
+    }
+    renderProfiles();
+  };
+
+  input.addEventListener('blur', commit);
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') input.blur();
+    if (e.key === 'Escape') renderProfiles();
+  });
+}
+
+// One-click way to bank whatever's left of a profile's budget into Savings, tagged so it never
+// gets offered twice for the same profile+month and never double-counts as new budget spend.
+function leftoverSavingsName(monthISO) { return `Leftover budget — ${monthISO}`; }
+
+function hasLeftoverSaved(profileId) {
+  const name = leftoverSavingsName(fmtDateISO(currentMonth));
+  return savings.some(s => s.profile_id === profileId && s.name === name);
+}
+
+async function saveLeftoverToSavings(profile, remaining) {
+  if (remaining <= 0) return;
+  if (!savingsTableReady) { toast('Run the updated schema.sql to enable savings first'); return; }
+  const monthISO = fmtDateISO(currentMonth);
+  const monthLabel = currentMonth.toLocaleString(undefined, { month: 'long', year: 'numeric' });
+  if (!confirm(`Move ${fmtMoney(remaining)} of ${profile.name}'s unspent ${monthLabel} budget into Savings?`)) return;
+
+  const lastDay = fmtDateISO(new Date(addMonths(currentMonth, 1).getTime() - 86400000));
+  const { error } = await sb.from('savings').insert({
+    profile_id: profile.id,
+    name: leftoverSavingsName(monthISO),
+    amount: remaining,
+    saved_date: lastDay,
+    note: `Unspent budget for ${monthLabel}`,
+    count_in_budget: false,
+  });
+  if (error) { toast('Failed: ' + error.message); return; }
+
+  toast('Leftover moved to savings');
+  await loadSavings();
+  renderAll();
 }
 
 function renderCategoryChart() {
@@ -729,6 +841,373 @@ async function confirmImport() {
   renderAll();
 }
 
+// ---------- receipt / screenshot scan ----------
+
+function scanCategorySelect(value) {
+  const sel = document.createElement('select');
+  CATEGORIES.forEach(c => {
+    const o = document.createElement('option');
+    o.value = c; o.textContent = c;
+    if (c === value) o.selected = true;
+    sel.appendChild(o);
+  });
+  return sel;
+}
+
+function scanProfilePicker(entry) {
+  const wrap = document.createElement('div');
+  wrap.className = 'profile-picker';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (entry.profileId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => {
+      entry.profileId = p.id;
+      wrap.querySelectorAll('.profile-pick-btn').forEach((b, i) => {
+        b.classList.toggle('selected', profiles[i].id === entry.profileId);
+      });
+    });
+    wrap.appendChild(btn);
+  });
+  return wrap;
+}
+
+function scanInsertCount() {
+  let n = 0;
+  scanDraft.forEach(e => {
+    if (!e.included) return;
+    if (e.lineItems.length && e.splitMode) n += e.lineItems.filter(i => i.checked && i.amount > 0).length;
+    else n += 1;
+  });
+  return n;
+}
+
+function updateScanSaveLabel() {
+  const n = scanInsertCount();
+  const btn = document.getElementById('scanSave');
+  btn.textContent = n > 0 ? `Save ${n} expense${n === 1 ? '' : 's'}` : 'Save';
+  btn.disabled = n === 0;
+}
+
+function buildScanCard(entry) {
+  const card = document.createElement('div');
+  card.className = 'scan-card';
+  card.innerHTML = `
+    <div class="scan-card-head">
+      <input class="scan-merchant" type="text" placeholder="Merchant" />
+      <button type="button" class="scan-remove" title="Exclude from save">✕</button>
+    </div>
+    <div class="scan-badges">
+      <button type="button" class="scan-badge scan-dir ${entry.direction}"></button>
+      ${entry.confidence != null ? `<span class="scan-badge muted">${Math.round(entry.confidence * 100)}% sure</span>` : ''}
+    </div>
+    <div class="scan-fields"></div>
+  `;
+
+  const merchantInput = card.querySelector('.scan-merchant');
+  merchantInput.value = entry.merchant;
+  merchantInput.addEventListener('input', () => { entry.merchant = merchantInput.value; });
+
+  const dirBtn = card.querySelector('.scan-dir');
+  const paintDir = () => {
+    dirBtn.className = 'scan-badge scan-dir ' + entry.direction;
+    dirBtn.textContent = entry.direction === 'credit' ? '↓ received' : '↑ spent';
+  };
+  paintDir();
+  dirBtn.addEventListener('click', () => {
+    entry.direction = entry.direction === 'credit' ? 'debit' : 'credit';
+    paintDir();
+  });
+
+  card.querySelector('.scan-remove').addEventListener('click', () => {
+    entry.included = false;
+    card.remove();
+    updateScanSaveLabel();
+  });
+
+  const fields = card.querySelector('.scan-fields');
+
+  // amount + candidate chips
+  const amountField = document.createElement('div');
+  amountField.className = 'field';
+  amountField.innerHTML = '<label>Amount charged</label>';
+  const amountInput = document.createElement('input');
+  amountInput.type = 'number'; amountInput.min = '0'; amountInput.step = '0.01';
+  amountInput.value = entry.amount;
+  amountInput.addEventListener('input', () => { entry.amount = amountInput.value; updateScanSaveLabel(); });
+  amountField.appendChild(amountInput);
+  if (entry.amountCandidates.length > 1) {
+    const chips = document.createElement('div');
+    chips.className = 'amount-chips';
+    entry.amountCandidates.forEach(a => {
+      const chip = document.createElement('button');
+      chip.type = 'button';
+      chip.className = 'amount-chip';
+      chip.textContent = fmtMoney(a);
+      chip.addEventListener('click', () => {
+        entry.amount = String(a);
+        amountInput.value = a;
+        updateScanSaveLabel();
+      });
+      chips.appendChild(chip);
+    });
+    amountField.appendChild(chips);
+  }
+  fields.appendChild(amountField);
+
+  // date
+  const dateField = document.createElement('div');
+  dateField.className = 'field';
+  dateField.innerHTML = '<label>Date</label>';
+  const dateInput = document.createElement('input');
+  dateInput.type = 'date';
+  dateInput.value = entry.date;
+  dateInput.addEventListener('input', () => { entry.date = dateInput.value; });
+  dateField.appendChild(dateInput);
+  fields.appendChild(dateField);
+
+  // profile
+  const profField = document.createElement('div');
+  profField.className = 'field';
+  profField.innerHTML = '<label>Profile</label>';
+  profField.appendChild(scanProfilePicker(entry));
+  fields.appendChild(profField);
+
+  // category (hidden when splitting into line items)
+  const catField = document.createElement('div');
+  catField.className = 'field';
+  catField.innerHTML = '<label>Category</label>';
+  const catSel = scanCategorySelect(entry.category);
+  catSel.addEventListener('change', () => { entry.category = catSel.value; });
+  catField.appendChild(catSel);
+  fields.appendChild(catField);
+
+  // note
+  const noteField = document.createElement('div');
+  noteField.className = 'field';
+  noteField.innerHTML = '<label>Note</label>';
+  const noteInput = document.createElement('input');
+  noteInput.type = 'text';
+  noteInput.value = entry.note;
+  noteInput.addEventListener('input', () => { entry.note = noteInput.value; });
+  noteField.appendChild(noteInput);
+  fields.appendChild(noteField);
+
+  // line items -> optional split
+  if (entry.lineItems.length) {
+    const split = document.createElement('div');
+    split.className = 'scan-split';
+    split.innerHTML = `
+      <label class="scan-split-toggle">
+        <input type="checkbox" class="scan-split-cb" />
+        Add ticked items as separate expenses (${entry.lineItems.length} found)
+      </label>
+      <div class="scan-items"></div>
+    `;
+    const itemsWrap = split.querySelector('.scan-items');
+    entry.lineItems.forEach(item => {
+      const row = document.createElement('div');
+      row.className = 'scan-lineitem';
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = item.checked;
+      cb.addEventListener('change', () => { item.checked = cb.checked; updateScanSaveLabel(); });
+      const desc = document.createElement('span');
+      desc.className = 'scan-item-desc';
+      desc.textContent = item.description;
+      const amt = document.createElement('span');
+      amt.className = 'scan-item-amt';
+      amt.textContent = fmtMoney(item.amount);
+      const isel = scanCategorySelect(item.category);
+      isel.className = 'scan-item-cat';
+      isel.addEventListener('change', () => { item.category = isel.value; });
+      row.append(cb, desc, amt, isel);
+      itemsWrap.appendChild(row);
+    });
+    const applyMode = () => {
+      itemsWrap.hidden = !entry.splitMode;
+      catField.hidden = entry.splitMode;
+      amountField.hidden = entry.splitMode;
+    };
+    split.querySelector('.scan-split-cb').addEventListener('change', (e) => {
+      entry.splitMode = e.target.checked;
+      applyMode();
+      updateScanSaveLabel();
+    });
+    applyMode();
+    fields.appendChild(split);
+  }
+
+  return card;
+}
+
+// One profile picker that stamps its choice onto every scanned transaction at once, so a
+// batch of receipts doesn't need picking a profile card-by-card. Individual cards can still
+// be overridden afterward — this just sets the shared starting point.
+function renderScanApplyAllPicker(selectedId) {
+  const picker = document.getElementById('scanApplyAllPicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => applyProfileToAllScanned(p.id));
+    picker.appendChild(btn);
+  });
+}
+
+function applyProfileToAllScanned(profileId) {
+  scanDraft.forEach(entry => { entry.profileId = profileId; });
+  renderScanApplyAllPicker(profileId);
+  renderScanCardsList();
+}
+
+function renderScanCardsList() {
+  const results = document.getElementById('scanResults');
+  results.innerHTML = '';
+  scanDraft.filter(entry => entry.included).forEach(entry => results.appendChild(buildScanCard(entry)));
+}
+
+function renderScanResults(transactions) {
+  const status = document.getElementById('scanStatus');
+  const applyAllRow = document.getElementById('scanApplyAllRow');
+  document.getElementById('scanResults').innerHTML = '';
+
+  if (!transactions.length) {
+    status.textContent = 'Nothing recognisable in those images. Try a clearer screenshot.';
+    document.getElementById('scanSave').disabled = true;
+    applyAllRow.hidden = true;
+    return;
+  }
+  status.textContent = `Review and edit, then save. ${transactions.length} transaction${transactions.length === 1 ? '' : 's'} found.`;
+
+  const defaultProfile = activeProfileFilter !== 'all' ? activeProfileFilter : (profiles[0]?.id || null);
+  const today = fmtDateISO(new Date());
+  const cat = (c, fallback) => (CATEGORIES.includes(c) ? c : fallback);
+
+  scanDraft = transactions.map((t, idx) => {
+    const total = Number(t.total_amount) || 0;
+    const cands = (Array.isArray(t.amount_candidates) ? t.amount_candidates : [])
+      .map(Number).filter(n => !isNaN(n) && n > 0);
+    if (total > 0 && !cands.includes(total)) cands.unshift(total);
+    const suggested = cat(t.suggested_category, 'Other');
+    const lineItems = (Array.isArray(t.line_items) ? t.line_items : [])
+      .map(li => ({
+        description: String(li.description || '').trim() || 'Item',
+        amount: Number(li.amount) || 0,
+        category: cat(li.category, suggested),
+        checked: true,
+      }))
+      .filter(li => li.amount > 0);
+    const noteBits = [
+      t.reference,
+      t.payment_method && t.payment_method !== 'unknown' ? String(t.payment_method).toUpperCase() : '',
+      t.notes,
+    ].map(s => String(s || '').trim()).filter(Boolean);
+
+    return {
+      id: 'scan-' + idx,
+      included: true,
+      merchant: String(t.merchant || '').trim(),
+      amount: total > 0 ? String(total) : '',
+      direction: t.direction === 'credit' ? 'credit' : 'debit',
+      date: /^\d{4}-\d{2}-\d{2}$/.test(t.date || '') ? t.date : today,
+      profileId: defaultProfile,
+      category: suggested,
+      note: noteBits.join(' · '),
+      confidence: typeof t.confidence === 'number' ? t.confidence : null,
+      amountCandidates: cands,
+      lineItems,
+      splitMode: false,
+    };
+  });
+
+  applyAllRow.hidden = profiles.length < 2;
+  renderScanApplyAllPicker(defaultProfile);
+  renderScanCardsList();
+  updateScanSaveLabel();
+}
+
+async function handleScanFiles(fileList) {
+  const files = Array.from(fileList).slice(0, MAX_SCAN_IMAGES);
+  if (!files.length) return;
+
+  const overlay = document.getElementById('scanOverlay');
+  const status = document.getElementById('scanStatus');
+  document.getElementById('scanResults').innerHTML = '';
+  scanDraft = [];
+  document.getElementById('scanSave').textContent = 'Save';
+  document.getElementById('scanSave').disabled = true;
+  status.innerHTML = `<span class="spinner"></span> Reading ${files.length} image${files.length === 1 ? '' : 's'}… this usually takes 5–15 seconds.`;
+  overlay.classList.add('open');
+
+  try {
+    const dataUrls = await Promise.all(files.map(f => fileToScaledJpeg(f)));
+    const transactions = await scanReceipts(dataUrls);
+    renderScanResults(transactions);
+  } catch (err) {
+    status.textContent = 'Scan failed: ' + (err?.message || err);
+  }
+}
+
+async function saveScanned() {
+  const inserts = [];
+  const problems = [];
+
+  scanDraft.forEach((e, idx) => {
+    if (!e.included) return;
+    const label = e.merchant || `Transaction ${idx + 1}`;
+    if (!e.profileId) { problems.push(`${label}: pick a profile`); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(e.date)) { problems.push(`${label}: pick a date`); return; }
+
+    if (e.lineItems.length && e.splitMode) {
+      const ticked = e.lineItems.filter(i => i.checked && i.amount > 0);
+      if (!ticked.length) { problems.push(`${label}: tick at least one item`); return; }
+      ticked.forEach(i => inserts.push({
+        profile_id: e.profileId,
+        amount: Number(i.amount),
+        category: i.category,
+        note: [e.merchant, i.description].filter(Boolean).join(' — ') || null,
+        expense_date: e.date,
+      }));
+    } else {
+      const amt = parseFloat(e.amount);
+      if (isNaN(amt) || amt <= 0) { problems.push(`${label}: enter a valid amount`); return; }
+      inserts.push({
+        profile_id: e.profileId,
+        amount: amt,
+        category: e.category,
+        note: e.note || null,
+        expense_date: e.date,
+      });
+    }
+  });
+
+  if (problems.length) { toast(problems[0]); return; }
+  if (!inserts.length) { toast('Nothing to save'); return; }
+
+  const btn = document.getElementById('scanSave');
+  btn.disabled = true;
+  const { error } = await sb.from('expenses').insert(inserts);
+  btn.disabled = false;
+  if (error) { toast('Save failed: ' + error.message); return; }
+
+  document.getElementById('scanOverlay').classList.remove('open');
+  document.getElementById('modalOverlay').classList.remove('open');
+  toast(`Added ${inserts.length} expense${inserts.length === 1 ? '' : 's'}`);
+
+  const earliest = inserts.reduce((m, r) => (r.expense_date < m ? r.expense_date : m), inserts[0].expense_date);
+  const earliestMonth = startOfMonth(new Date(earliest + 'T00:00:00'));
+  if (earliestMonth.getTime() !== currentMonth.getTime()) currentMonth = earliestMonth;
+
+  await loadAllData();
+  renderAll();
+}
+
 // ---------- modal ----------
 
 function renderModalProfilePicker() {
@@ -823,10 +1302,23 @@ async function init() {
   document.getElementById('modalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'modalOverlay') closeModal();
   });
+
+  document.getElementById('scanBtn').addEventListener('click', () => document.getElementById('scanFile').click());
+  document.getElementById('scanFile').addEventListener('change', (e) => {
+    if (e.target.files.length) handleScanFiles(e.target.files);
+    e.target.value = '';
+  });
+  document.getElementById('scanCancel').addEventListener('click', () => document.getElementById('scanOverlay').classList.remove('open'));
+  document.getElementById('scanSave').addEventListener('click', saveScanned);
+  document.getElementById('scanOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'scanOverlay') document.getElementById('scanOverlay').classList.remove('open');
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       closeModal();
       document.getElementById('profileDetailOverlay').classList.remove('open');
+      document.getElementById('scanOverlay').classList.remove('open');
       closeGoalModal();
     }
   });

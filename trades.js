@@ -1,7 +1,7 @@
 import {
   sb, setupAuth, toast, fmtMoney, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
-  tradeStatusInfo, tradesSummary,
+  tradeStatusInfo, tradesSummary, netExitAmount, stopLossInfo,
 } from './common.js';
 
 let trades = [];
@@ -57,6 +57,10 @@ function renderSummary() {
     <div class="stat-tile">
       <div class="label">Open Positions</div>
       <div class="value">${s.openCount} · ${fmtMoney(s.openInvested)}</div>
+    </div>
+    <div class="stat-tile">
+      <div class="label">Open Risk (stop losses)</div>
+      <div class="value ${s.openRisk > 0 ? 'critical' : ''}">${s.openRisk > 0 ? fmtMoney(s.openRisk) : '—'}</div>
     </div>`;
 }
 
@@ -75,9 +79,12 @@ function renderList() {
     const targetDateStr = info.targetDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
 
     let badge, cardClass, metaLine, numbersLine;
+    const outcomeTag = t.manual_outcome
+      ? `<span class="trade-badge ${t.manual_outcome === 'successful' ? 'win' : 'loss'}">${t.manual_outcome === 'successful' ? '✓ Marked successful' : '✗ Marked unsuccessful'}</span>`
+      : '';
     if (info.closed) {
       const win = info.hitTarget;
-      badge = `<span class="trade-badge ${win ? 'win' : 'loss'}">${win ? 'Target hit' : 'Below target'}</span>`;
+      badge = `<span class="trade-badge ${win ? 'win' : 'loss'}">${win ? 'Target hit' : 'Below target'}</span>${outcomeTag}`;
       cardClass = win ? 'closed-win' : 'closed-loss';
       const gainClass = info.amount >= 0 ? 'good' : 'critical';
       numbersLine = `
@@ -85,7 +92,8 @@ function renderList() {
         <span>Exited: <strong>${fmtMoney(t.exit_amount)}</strong></span>
         <span>Gain: <strong class="${gainClass}">${info.amount >= 0 ? '+' : ''}${fmtMoney(info.amount)} (${info.percent.toFixed(2)}%)</strong></span>`;
       const exitDateStr = t.exit_date ? new Date(t.exit_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—';
-      metaLine = `Invested ${dateStr} · Exited ${exitDateStr} (target was ${t.target_percent}% by ${targetDateStr})`;
+      const loadStr = t.exit_load_percent != null ? ` · Exit load ${t.exit_load_percent}%` : '';
+      metaLine = `Invested ${dateStr} · Exited ${exitDateStr} (target was ${t.target_percent}% by ${targetDateStr})${loadStr}`;
     } else {
       const overdue = info.overdue;
       badge = overdue
@@ -95,7 +103,15 @@ function renderList() {
       numbersLine = `
         <span>Invested: <strong>${fmtMoney(t.invested_amount)}</strong></span>
         <span>Target: <strong>${t.target_percent}%</strong></span>`;
-      metaLine = `Invested ${dateStr} · Target by ${targetDateStr} (${t.period_value} ${t.period_unit})`;
+      const slInfo = stopLossInfo(t);
+      if (slInfo) {
+        numbersLine += `<span>Stop loss: <strong>${fmtMoney(t.stop_loss_price)}</strong></span>
+        <span>Potential loss: <strong class="critical">${fmtMoney(slInfo.amount)} (${slInfo.percent.toFixed(2)}%)</strong></span>`;
+      } else if (t.stop_loss_enabled) {
+        numbersLine += `<span>Stop loss: <strong>${fmtMoney(t.stop_loss_price)}</strong></span>`;
+      }
+      const triggerStr = t.trigger_price != null ? ` · Target price ${fmtMoney(t.trigger_price)}` : '';
+      metaLine = `Invested ${dateStr} · Target by ${targetDateStr} (${t.period_value} ${t.period_unit})${triggerStr}`;
     }
 
     card.className = `trade-card ${cardClass}`;
@@ -136,6 +152,38 @@ function setExitVisible(visible) {
   document.getElementById('tExitToggle').checked = visible;
 }
 
+function setStopLossVisible(visible) {
+  document.getElementById('stopLossFields').hidden = !visible;
+  document.getElementById('tStopLossToggle').checked = visible;
+  if (!visible) document.getElementById('stopLossHint').textContent = '';
+}
+
+function updateStopLossHint() {
+  const qty = parseFloat(document.getElementById('tQuantity').value);
+  const entry = parseFloat(document.getElementById('tEntryPrice').value);
+  const stopLoss = parseFloat(document.getElementById('tStopLossPrice').value);
+  const hint = document.getElementById('stopLossHint');
+  if (isNaN(qty) || qty <= 0 || isNaN(entry)) {
+    hint.textContent = 'Enter quantity and entry price above to see the potential loss.';
+    return;
+  }
+  if (isNaN(stopLoss)) { hint.textContent = ''; return; }
+  const info = stopLossInfo({ quantity: qty, entry_price: entry, stop_loss_price: stopLoss, stop_loss_enabled: true, invested_amount: parseFloat(document.getElementById('tInvested').value) || 0 });
+  if (!info) { hint.textContent = ''; return; }
+  hint.textContent = info.amount > 0
+    ? `Potential loss: ${fmtMoney(info.amount)} (${info.percent.toFixed(2)}% of amount invested).`
+    : `Stop loss is at or above entry price — no downside from here.`;
+}
+
+function updateTriggerHint() {
+  const entry = parseFloat(document.getElementById('tEntryPrice').value);
+  const trigger = parseFloat(document.getElementById('tTriggerPrice').value);
+  const hint = document.getElementById('triggerHint');
+  if (isNaN(entry) || entry <= 0 || isNaN(trigger)) { hint.textContent = ''; return; }
+  const pct = ((trigger - entry) / entry) * 100;
+  hint.textContent = `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% vs. entry price.`;
+}
+
 function updateInvestedFromEntry() {
   const qty = parseFloat(document.getElementById('tQuantity').value);
   const price = parseFloat(document.getElementById('tEntryPrice').value);
@@ -157,10 +205,14 @@ function updateExitGainHint() {
   }
   const invested = parseFloat(document.getElementById('tInvested').value);
   const exitAmount = parseFloat(document.getElementById('tExitAmount').value);
-  if (!isNaN(invested) && invested > 0 && !isNaN(exitAmount)) {
-    const gain = exitAmount - invested;
+  const exitLoadRaw = document.getElementById('tExitLoad').value;
+  const exitLoadPercent = exitLoadRaw === '' ? 0 : parseFloat(exitLoadRaw);
+  if (!isNaN(invested) && invested > 0 && !isNaN(exitAmount) && !isNaN(exitLoadPercent)) {
+    const net = netExitAmount({ exit_amount: exitAmount, exit_load_percent: exitLoadPercent });
+    const gain = net - invested;
     const pct = (gain / invested) * 100;
-    hint.textContent = `${gain >= 0 ? '+' : ''}${fmtMoney(gain)} (${pct.toFixed(2)}%) vs. amount invested.`;
+    const loadNote = exitLoadPercent > 0 ? ` after ${exitLoadPercent}% exit load (net ${fmtMoney(net)})` : '';
+    hint.textContent = `${gain >= 0 ? '+' : ''}${fmtMoney(gain)} (${pct.toFixed(2)}%) vs. amount invested${loadNote}.`;
   } else {
     hint.textContent = '';
   }
@@ -179,14 +231,22 @@ function openModal(t) {
   document.getElementById('tPeriodValue').value = t ? t.period_value : 7;
   document.getElementById('tPeriodUnit').value = t ? t.period_unit : 'days';
   document.getElementById('tTargetPercent').value = t ? t.target_percent : '';
+  document.getElementById('tTriggerPrice').value = t && t.trigger_price != null ? t.trigger_price : '';
+  document.getElementById('triggerHint').textContent = '';
   document.getElementById('tNotes').value = t && t.notes ? t.notes : '';
   document.getElementById('investedHint').textContent = '';
+
+  const hasStopLoss = !!(t && t.stop_loss_enabled);
+  setStopLossVisible(hasStopLoss);
+  document.getElementById('tStopLossPrice').value = hasStopLoss && t.stop_loss_price != null ? t.stop_loss_price : '';
 
   const isClosed = t && t.status === 'closed';
   setExitVisible(isClosed);
   document.getElementById('tExitDate').value = isClosed ? t.exit_date : fmtDateISO(new Date());
   document.getElementById('tExitPrice').value = isClosed && t.exit_price != null ? t.exit_price : '';
   document.getElementById('tExitAmount').value = isClosed && t.exit_amount != null ? t.exit_amount : '';
+  document.getElementById('tExitLoad').value = isClosed && t.exit_load_percent != null ? t.exit_load_percent : '';
+  document.getElementById('tManualOutcome').value = t && t.manual_outcome ? t.manual_outcome : '';
   document.getElementById('exitGainHint').textContent = '';
 
   document.getElementById('tradeModalOverlay').classList.add('open');
@@ -205,6 +265,7 @@ async function saveTrade() {
   const periodValue = parseInt(document.getElementById('tPeriodValue').value, 10);
   const periodUnit = document.getElementById('tPeriodUnit').value;
   const targetPercent = parseFloat(document.getElementById('tTargetPercent').value);
+  const triggerPriceRaw = document.getElementById('tTriggerPrice').value;
   const notes = document.getElementById('tNotes').value.trim();
 
   if (!selectedProfileId) { toast('Pick a profile'); return; }
@@ -213,17 +274,36 @@ async function saveTrade() {
   if (!tradeDate) { toast('Pick the date of investment'); return; }
   if (isNaN(periodValue) || periodValue <= 0) { toast('Enter a valid time period'); return; }
   if (isNaN(targetPercent) || targetPercent < 0) { toast('Enter a valid target percentage'); return; }
+  if (triggerPriceRaw !== '' && (isNaN(parseFloat(triggerPriceRaw)) || parseFloat(triggerPriceRaw) < 0)) {
+    toast('Enter a valid target price, or leave it blank');
+    return;
+  }
+
+  const hasStopLoss = document.getElementById('tStopLossToggle').checked;
+  let stopLossPrice = null;
+  if (hasStopLoss) {
+    const stopLossRaw = document.getElementById('tStopLossPrice').value;
+    stopLossPrice = stopLossRaw === '' ? NaN : parseFloat(stopLossRaw);
+    if (isNaN(stopLossPrice) || stopLossPrice < 0) { toast('Enter a valid stop loss price'); return; }
+  }
 
   const isExited = document.getElementById('tExitToggle').checked;
-  let exitDate = null, exitAmount = null, exitPrice = null;
+  let exitDate = null, exitAmount = null, exitPrice = null, exitLoadPercent = null;
   if (isExited) {
     exitDate = document.getElementById('tExitDate').value;
     exitAmount = parseFloat(document.getElementById('tExitAmount').value);
     const exitPriceRaw = document.getElementById('tExitPrice').value;
     exitPrice = exitPriceRaw === '' ? null : parseFloat(exitPriceRaw);
+    const exitLoadRaw = document.getElementById('tExitLoad').value;
+    exitLoadPercent = exitLoadRaw === '' ? null : parseFloat(exitLoadRaw);
     if (!exitDate) { toast('Pick the exit date'); return; }
     if (isNaN(exitAmount) || exitAmount < 0) { toast('Enter a valid exit amount'); return; }
+    if (exitLoadPercent != null && (isNaN(exitLoadPercent) || exitLoadPercent < 0)) {
+      toast('Enter a valid exit load percentage, or leave it blank');
+      return;
+    }
   }
+  const manualOutcome = isExited ? (document.getElementById('tManualOutcome').value || null) : null;
 
   const payload = {
     profile_id: selectedProfileId,
@@ -235,11 +315,16 @@ async function saveTrade() {
     period_value: periodValue,
     period_unit: periodUnit,
     target_percent: targetPercent,
+    trigger_price: triggerPriceRaw === '' ? null : parseFloat(triggerPriceRaw),
+    stop_loss_enabled: hasStopLoss,
+    stop_loss_price: stopLossPrice,
     notes: notes || null,
     status: isExited ? 'closed' : 'open',
     exit_date: exitDate,
     exit_amount: exitAmount,
     exit_price: exitPrice,
+    exit_load_percent: exitLoadPercent,
+    manual_outcome: manualOutcome,
   };
 
   const { error } = editingId
@@ -273,16 +358,30 @@ async function init() {
   });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
 
-  document.getElementById('tQuantity').addEventListener('input', () => { updateInvestedFromEntry(); updateExitGainHint(); });
-  document.getElementById('tEntryPrice').addEventListener('input', updateInvestedFromEntry);
-  document.getElementById('tInvested').addEventListener('input', updateExitGainHint);
+  document.getElementById('tQuantity').addEventListener('input', () => { updateInvestedFromEntry(); updateExitGainHint(); updateStopLossHint(); });
+  document.getElementById('tEntryPrice').addEventListener('input', () => { updateInvestedFromEntry(); updateStopLossHint(); updateTriggerHint(); });
+  document.getElementById('tInvested').addEventListener('input', () => { updateExitGainHint(); updateStopLossHint(); });
   document.getElementById('tExitPrice').addEventListener('input', updateExitGainHint);
   document.getElementById('tExitAmount').addEventListener('input', updateExitGainHint);
+  document.getElementById('tExitLoad').addEventListener('input', updateExitGainHint);
   document.getElementById('exitToggleRow').addEventListener('click', (e) => {
     if (e.target.id === 'tExitToggle') return;
     setExitVisible(!document.getElementById('tExitToggle').checked);
   });
   document.getElementById('tExitToggle').addEventListener('change', (e) => setExitVisible(e.target.checked));
+
+  document.getElementById('tTriggerPrice').addEventListener('input', updateTriggerHint);
+  document.getElementById('tStopLossPrice').addEventListener('input', updateStopLossHint);
+  document.getElementById('stopLossToggleRow').addEventListener('click', (e) => {
+    if (e.target.id === 'tStopLossToggle') return;
+    const next = !document.getElementById('tStopLossToggle').checked;
+    setStopLossVisible(next);
+    if (next) updateStopLossHint();
+  });
+  document.getElementById('tStopLossToggle').addEventListener('change', (e) => {
+    setStopLossVisible(e.target.checked);
+    if (e.target.checked) updateStopLossHint();
+  });
 
   try {
     await Promise.all([loadTrades(), loadProfiles()]);

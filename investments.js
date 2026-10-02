@@ -1,8 +1,9 @@
 import {
-  sb, setupAuth, toast, fmtMoney, escapeHtml, fmtDateISO,
+  sb, setupAuth, toast, fmtMoney, fmtMoneyCountry, escapeHtml, fmtDateISO,
   applyStoredTheme, toggleTheme, initSidebar,
   PROJECTION_MILESTONES, sumInvested, totalProjected,
   investedAmount, investmentProjectedValue, sipCurrentRate, averageReturn,
+  investmentActualValue, totalActual, groupInvestmentsByCountry,
 } from './common.js';
 
 let investments = [];
@@ -40,79 +41,144 @@ function renderProfilePicker() {
   });
 }
 
-function renderDashboard() {
-  const row = document.getElementById('investStatRow');
-  const totalInvested = sumInvested(investments);
-  let html = `
-    <div class="stat-tile">
-      <div class="label">Total Invested</div>
-      <div class="value">${fmtMoney(totalInvested)}</div>
+function figuresHtml(projected, actual, country) {
+  return `
+    <div class="figure">
+      <div class="fig-label">Projected</div>
+      <div class="fig-value">${fmtMoneyCountry(projected, country)}</div>
+    </div>
+    <div class="figure">
+      <div class="fig-label">Actual (net of costs)</div>
+      <div class="fig-value net">${fmtMoneyCountry(actual, country)}</div>
     </div>`;
-  PROJECTION_MILESTONES.forEach(y => {
-    html += `
-      <div class="stat-tile">
-        <div class="label">In ${y} years</div>
-        <div class="value">${fmtMoney(totalProjected(investments, y))}</div>
+}
+
+function countryLabel(country) {
+  return country === 'India' ? '🇮🇳 National' : `🌍 Global — ${escapeHtml(country)}`;
+}
+
+// One broad card per currency group — never sums different currencies together, since this
+// app has no live exchange rates (a group is exactly the investments sharing one `country`).
+function renderDashboard() {
+  const container = document.getElementById('investGroups');
+  const emptyNote = document.getElementById('investGroupsEmpty');
+  const customYears = Math.max(1, parseInt(document.getElementById('investCustomYears').value, 10) || 1);
+
+  if (investments.length === 0) {
+    container.innerHTML = '';
+    emptyNote.style.display = '';
+    return;
+  }
+  emptyNote.style.display = 'none';
+
+  const groups = groupInvestmentsByCountry(investments);
+  container.innerHTML = groups.map(({ country, investments: groupInvestments }) => {
+    const rows = [...PROJECTION_MILESTONES, customYears]
+      .filter((y, i, arr) => arr.indexOf(y) === i) // dedupe if custom years matches a milestone
+      .sort((a, b) => a - b)
+      .map(y => `
+        <div class="invest-projection-row">
+          <div class="label">In ${y} year${y === 1 ? '' : 's'}</div>
+          <div class="invest-projection-values">${figuresHtml(totalProjected(groupInvestments, y), totalActual(groupInvestments, y), country)}</div>
+        </div>`).join('');
+    return `
+      <div class="invest-group-card">
+        <div class="invest-group-head">
+          <strong>${countryLabel(country)}</strong>
+          <span class="total-invested">Total invested: <strong>${fmtMoneyCountry(sumInvested(groupInvestments), country)}</strong></span>
+        </div>
+        ${rows}
       </div>`;
-  });
-  row.innerHTML = html;
-  updateCustomProjection();
+  }).join('');
 }
 
 function updateCustomProjection() {
-  const yearsInput = document.getElementById('investCustomYears');
-  const years = Math.max(1, parseInt(yearsInput.value, 10) || 1);
-  document.getElementById('investCustomValue').textContent = fmtMoney(totalProjected(investments, years));
+  renderDashboard();
+}
+
+function renderInvestmentCard(inv) {
+  const card = document.createElement('div');
+  card.className = 'investment-card';
+  const dateStr = new Date(inv.start_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+  const title = inv.name ? inv.name : inv.type;
+  const isSip = inv.investment_mode === 'sip';
+  const sipRate = isSip ? sipCurrentRate(inv.sip_history) : 0;
+  const hasReturnHistory = Array.isArray(inv.return_history) && inv.return_history.length > 1;
+  const returnLabel = hasReturnHistory
+    ? `${averageReturn(inv).toFixed(2)}% avg`
+    : `${Number(averageReturn(inv))}%`;
+  const owner = profiles.find(p => p.id === inv.profile_id);
+  const country = inv.country || 'India';
+  const costTags = [
+    inv.exit_load_percent != null ? `Exit load ${inv.exit_load_percent}%` : null,
+    inv.brokerage_percent != null ? `Brokerage ${inv.brokerage_percent}%` : null,
+    inv.brokerage_fee != null ? `Fee ${fmtMoneyCountry(inv.brokerage_fee, country)}` : null,
+    inv.count_in_budget === false ? 'Not budgeted' : null,
+  ].filter(Boolean);
+  const metaLine = isSip
+    ? `SIP ${fmtMoneyCountry(sipRate, country)}/mo since ${dateStr}`
+    : `Since ${dateStr}`;
+  card.innerHTML = `
+    <div class="investment-head">
+      <div class="investment-type">
+        ${escapeHtml(title)}
+        ${inv.name ? `<span class="investment-subtype">${escapeHtml(inv.type)}</span>` : ''}
+        ${isSip ? `<span class="investment-subtype">SIP</span>` : ''}
+        ${country !== 'India' ? `<span class="investment-subtype">${escapeHtml(country)}</span>` : ''}
+        ${costTags.map(t => `<span class="investment-subtype">${t}</span>`).join('')}
+        <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
+      </div>
+      <button class="txn-del" title="Delete">🗑️</button>
+    </div>
+    <div class="investment-numbers">
+      <span>Invested to date: <strong>${fmtMoneyCountry(investedAmount(inv), country)}</strong></span>
+      <span>Return: <strong>${returnLabel}</strong>/yr</span>
+    </div>
+    <div class="investment-meta">${metaLine}</div>
+    <div class="invest-projection-row">
+      <div class="label">In 10 years</div>
+      <div class="invest-projection-values">
+        <div class="figure">
+          <div class="fig-label">Projected</div>
+          <div class="fig-value">${fmtMoneyCountry(investmentProjectedValue(inv, 10), country)}</div>
+        </div>
+        <div class="figure">
+          <div class="fig-label">Actual (net)</div>
+          <div class="fig-value net">${fmtMoneyCountry(investmentActualValue(inv, 10), country)}</div>
+        </div>
+      </div>
+    </div>
+  `;
+  card.addEventListener('click', (e) => {
+    if (e.target.closest('.txn-del')) return;
+    openModal(inv);
+  });
+  card.querySelector('.txn-del').addEventListener('click', (e) => {
+    e.stopPropagation();
+    deleteInvestment(inv.id);
+  });
+  return card;
 }
 
 function renderList() {
-  const list = document.getElementById('investList');
-  if (investments.length === 0) {
-    list.innerHTML = '<div class="empty-note">No investments yet. Tap + to add one.</div>';
-    return;
+  const nationalList = document.getElementById('investListNational');
+  const globalList = document.getElementById('investListGlobal');
+  const national = investments.filter(inv => (inv.country || 'India') === 'India');
+  const global = investments.filter(inv => (inv.country || 'India') !== 'India');
+
+  nationalList.innerHTML = '';
+  if (national.length === 0) {
+    nationalList.innerHTML = '<div class="empty-note">No national investments yet. Tap + to add one.</div>';
+  } else {
+    national.forEach(inv => nationalList.appendChild(renderInvestmentCard(inv)));
   }
-  list.innerHTML = '';
-  investments.forEach(inv => {
-    const card = document.createElement('div');
-    card.className = 'investment-card';
-    const dateStr = new Date(inv.start_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
-    const title = inv.name ? inv.name : inv.type;
-    const isSip = inv.investment_mode === 'sip';
-    const sipRate = isSip ? sipCurrentRate(inv.sip_history) : 0;
-    const hasReturnHistory = Array.isArray(inv.return_history) && inv.return_history.length > 1;
-    const returnLabel = hasReturnHistory
-      ? `${averageReturn(inv).toFixed(2)}% avg`
-      : `${Number(averageReturn(inv))}%`;
-    const owner = profiles.find(p => p.id === inv.profile_id);
-    const metaLine = isSip
-      ? `SIP ${fmtMoney(sipRate)}/mo since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`
-      : `Since ${dateStr} · Projected in 10y: ${fmtMoney(investmentProjectedValue(inv, 10))}`;
-    card.innerHTML = `
-      <div class="investment-head">
-        <div class="investment-type">
-          ${escapeHtml(title)}
-          ${inv.name ? `<span class="investment-subtype">${escapeHtml(inv.type)}</span>` : ''}
-          ${isSip ? `<span class="investment-subtype">SIP</span>` : ''}
-          <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
-        </div>
-        <button class="txn-del" title="Delete">🗑️</button>
-      </div>
-      <div class="investment-numbers">
-        <span>Invested to date: <strong>${fmtMoney(investedAmount(inv))}</strong></span>
-        <span>Return: <strong>${returnLabel}</strong>/yr</span>
-      </div>
-      <div class="investment-meta">${metaLine}</div>
-    `;
-    card.addEventListener('click', (e) => {
-      if (e.target.closest('.txn-del')) return;
-      openModal(inv);
-    });
-    card.querySelector('.txn-del').addEventListener('click', (e) => {
-      e.stopPropagation();
-      deleteInvestment(inv.id);
-    });
-    list.appendChild(card);
-  });
+
+  globalList.innerHTML = '';
+  if (global.length === 0) {
+    globalList.innerHTML = '<div class="empty-note">No global investments yet. Pick a country other than India when adding one.</div>';
+  } else {
+    global.forEach(inv => globalList.appendChild(renderInvestmentCard(inv)));
+  }
 }
 
 async function deleteInvestment(id) {
@@ -208,6 +274,11 @@ function openModal(inv) {
   document.getElementById('iName').value = inv ? (inv.name || '') : '';
   document.getElementById('iType').value = inv ? inv.type : '';
   document.getElementById('iDate').value = inv ? inv.start_date : fmtDateISO(new Date());
+  document.getElementById('iCountry').value = inv ? (inv.country || 'India') : 'India';
+  document.getElementById('iExitLoad').value = inv && inv.exit_load_percent != null ? inv.exit_load_percent : '';
+  document.getElementById('iBrokeragePercent').value = inv && inv.brokerage_percent != null ? inv.brokerage_percent : '';
+  document.getElementById('iBrokerageFee').value = inv && inv.brokerage_fee != null ? inv.brokerage_fee : '';
+  document.getElementById('iCountBudget').checked = inv ? inv.count_in_budget !== false : true;
 
   clearSipChangeRows();
   if (isSip) {
@@ -247,6 +318,28 @@ async function saveInvestment() {
   if (isNaN(annualReturn) || annualReturn < 0) { toast('Enter a valid expected return'); return; }
   if (!startDate) { toast('Pick a start date'); return; }
 
+  const country = document.getElementById('iCountry').value;
+  const exitLoadRaw = document.getElementById('iExitLoad').value;
+  const exitLoadPercent = exitLoadRaw === '' ? null : parseFloat(exitLoadRaw);
+  if (exitLoadPercent != null && (isNaN(exitLoadPercent) || exitLoadPercent < 0)) {
+    toast('Enter a valid exit load percentage, or leave it blank');
+    return;
+  }
+
+  const brokeragePercentRaw = document.getElementById('iBrokeragePercent').value;
+  const brokeragePercent = brokeragePercentRaw === '' ? null : parseFloat(brokeragePercentRaw);
+  if (brokeragePercent != null && (isNaN(brokeragePercent) || brokeragePercent < 0)) {
+    toast('Enter a valid brokerage percentage, or leave it blank');
+    return;
+  }
+
+  const brokerageFeeRaw = document.getElementById('iBrokerageFee').value;
+  const brokerageFee = brokerageFeeRaw === '' ? null : parseFloat(brokerageFeeRaw);
+  if (brokerageFee != null && (isNaN(brokerageFee) || brokerageFee < 0)) {
+    toast('Enter a valid brokerage fee, or leave it blank');
+    return;
+  }
+
   const returnChangeRows = readReturnChangeRows();
   for (const row of returnChangeRows) {
     if (!row.date || isNaN(row.rate) || row.rate < 0) {
@@ -261,6 +354,7 @@ async function saveInvestment() {
     .map(([date, rate]) => ({ date, rate }))
     .sort((a, b) => a.date.localeCompare(b.date));
 
+  const countInBudget = document.getElementById('iCountBudget').checked;
   let payload;
 
   if (currentMode === 'sip') {
@@ -290,7 +384,9 @@ async function saveInvestment() {
       profile_id: selectedProfileId,
       name: name || null, type, amount: topup, annual_return: annualReturn,
       start_date: sipHistory[0].date, investment_mode: 'sip', sip_history: sipHistory,
-      return_history: returnHistory,
+      return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
+      brokerage_percent: brokeragePercent, brokerage_fee: brokerageFee,
+      count_in_budget: countInBudget,
     };
   } else {
     const amount = parseFloat(document.getElementById('iAmount').value);
@@ -299,7 +395,9 @@ async function saveInvestment() {
       profile_id: selectedProfileId,
       name: name || null, type, amount, annual_return: annualReturn,
       start_date: startDate, investment_mode: 'lumpsum', sip_history: null,
-      return_history: returnHistory,
+      return_history: returnHistory, country, exit_load_percent: exitLoadPercent,
+      brokerage_percent: brokeragePercent, brokerage_fee: brokerageFee,
+      count_in_budget: countInBudget,
     };
   }
 
@@ -339,7 +437,7 @@ async function init() {
   document.getElementById('investModalOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'investModalOverlay') closeModal();
   });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeModal(); } });
   document.getElementById('investCustomYears').addEventListener('input', updateCustomProjection);
 
   try {

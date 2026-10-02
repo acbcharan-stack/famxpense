@@ -2,3 +2,6 @@ project_id = "pxjryedxetccuxqclbjz"
 
 [functions.notify]
 verify_jwt = false
+
+[functions.parse-receipt]
+verify_jwt = true

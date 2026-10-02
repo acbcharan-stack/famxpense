@@ -108,6 +108,8 @@
 <div class="modal-overlay" id="modalOverlay">
   <div class="modal">
     <h2>Add expense</h2>
+    <button type="button" class="btn btn-ghost btn-sm scan-trigger" id="scanBtn">📷 Scan receipt / screenshot</button>
+    <input type="file" id="scanFile" accept="image/*" capture="environment" multiple hidden />
     <div class="field">
       <label>Profile</label>
       <div class="profile-picker" id="modalProfilePicker"></div>
@@ -131,6 +133,22 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="modalCancel">Cancel</button>
       <button class="btn btn-primary" id="modalSave">Save expense</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="scanOverlay">
+  <div class="modal modal-wide">
+    <h2>Review scanned transactions</h2>
+    <div id="scanStatus" class="scan-status"></div>
+    <div class="field scan-apply-all-row" id="scanApplyAllRow" hidden>
+      <label>Apply one profile to all of these</label>
+      <div class="profile-picker" id="scanApplyAllPicker"></div>
+    </div>
+    <div id="scanResults"></div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="scanCancel">Cancel</button>
+      <button class="btn btn-primary" id="scanSave" disabled>Save</button>
     </div>
   </div>
 </div>

@@ -69,6 +69,49 @@ export async function signOut() {
   window.location.reload();
 }
 
+// ---------- expenses / receipt scanning ----------
+
+// The category list for the Add-expense dropdown and import validation. The
+// parse-receipt edge function keeps its own copy — update both together.
+export const CATEGORIES = ['Food', 'Groceries', 'Transport', 'Housing/Rent', 'Utilities', 'Entertainment', 'Shopping', 'Health', 'Education', 'Savings & Investment', 'Other'];
+
+// Downscale an image File to a JPEG data URL so receipt uploads stay small and fast.
+// Smaller = faster upload and a quicker vision pass; ~1100px keeps text readable.
+export async function fileToScaledJpeg(file, maxDim = 1100, quality = 0.8) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, maxDim / Math.max(bitmap.width, bitmap.height));
+  const w = Math.max(1, Math.round(bitmap.width * scale));
+  const h = Math.max(1, Math.round(bitmap.height * scale));
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, w, h);
+  bitmap.close?.();
+  return canvas.toDataURL('image/jpeg', quality);
+}
+
+// Send scaled screenshots to the parse-receipt edge function. Resolves to an array of
+// parsed transaction objects (see that function for the shape); throws with a readable
+// message on failure or after SCAN_TIMEOUT_MS so the UI never hangs indefinitely.
+const SCAN_TIMEOUT_MS = 60000;
+
+export async function scanReceipts(dataUrls) {
+  const invoke = sb.functions.invoke('parse-receipt', { body: { images: dataUrls } });
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Timed out — try again with one clearer image')), SCAN_TIMEOUT_MS));
+
+  const { data, error } = await Promise.race([invoke, timeout]);
+  if (error) {
+    let msg = error.message || 'Scan failed';
+    try {
+      const ctx = await error.context?.json?.();
+      if (ctx?.error) msg = ctx.error;
+    } catch { /* keep the generic message */ }
+    throw new Error(msg);
+  }
+  return Array.isArray(data?.transactions) ? data.transactions : [];
+}
+
 // ---------- date / money helpers ----------
 
 export function pad(n) { return String(n).padStart(2, '0'); }
@@ -79,6 +122,32 @@ export function addMonths(d, n) { return new Date(d.getFullYear(), d.getMonth() 
 export function fmtMoney(n) {
   const v = Number(n) || 0;
   return (v < 0 ? '-' : '') + '₹' + Math.abs(v).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+// Countries a foreign investment can be tagged with. Each entry's symbol is used only to
+// *display* that investment's own amounts — there is no live exchange-rate conversion, so
+// aggregate totals across investments in different currencies are a naive sum, not a real one.
+export const COUNTRY_CURRENCIES = [
+  { country: 'India', symbol: '₹', locale: 'en-IN' },
+  { country: 'United States', symbol: '$', locale: 'en-US' },
+  { country: 'United Kingdom', symbol: '£', locale: 'en-GB' },
+  { country: 'Canada', symbol: 'C$', locale: 'en-CA' },
+  { country: 'Australia', symbol: 'A$', locale: 'en-AU' },
+  { country: 'Singapore', symbol: 'S$', locale: 'en-SG' },
+  { country: 'United Arab Emirates', symbol: 'AED ', locale: 'en-AE' },
+  { country: 'Germany', symbol: '€', locale: 'de-DE' },
+  { country: 'Japan', symbol: '¥', locale: 'ja-JP' },
+  { country: 'Switzerland', symbol: 'CHF ', locale: 'de-CH' },
+];
+
+export function currencyForCountry(country) {
+  return COUNTRY_CURRENCIES.find(c => c.country === country) || COUNTRY_CURRENCIES[0];
+}
+
+export function fmtMoneyCountry(n, country) {
+  const v = Number(n) || 0;
+  const cur = currencyForCountry(country);
+  return (v < 0 ? '-' : '') + cur.symbol + Math.abs(v).toLocaleString(cur.locale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 export function hexToRgba(hex, alpha) {
@@ -105,6 +174,7 @@ export function toast(msg) {
 
 const NAV_LINKS = [
   { page: 'expenses', href: 'index.html', emoji: '💸', label: 'Expenses' },
+  { page: 'savings', href: 'savings.html', emoji: '🐷', label: 'Savings' },
   { page: 'investments', href: 'investments.html', emoji: '💰', label: 'Investments' },
   { page: 'trades', href: 'trades.html', emoji: '📈', label: 'Trading' },
 ];
@@ -271,6 +341,42 @@ export function totalProjected(investments, years) {
   return investments.reduce((s, inv) => s + investmentProjectedValue(inv, years), 0);
 }
 
+// What you'd actually walk away with from a given gross value, after the exit load (% on
+// redemption), brokerage (%), and any flat brokerage fee are deducted. Missing fields cost nothing.
+export function netInvestmentValue(inv, grossValue) {
+  const pct = (Number(inv.exit_load_percent) || 0) + (Number(inv.brokerage_percent) || 0);
+  const fee = Number(inv.brokerage_fee) || 0;
+  const net = grossValue - (grossValue * pct / 100) - fee;
+  return Math.max(0, net);
+}
+
+// The "actual" value `years` from now: the same growth model as investmentProjectedValue,
+// net of exit load, brokerage %, and flat brokerage fee as if you exited at that point.
+export function investmentActualValue(inv, years) {
+  return netInvestmentValue(inv, investmentProjectedValue(inv, years));
+}
+
+export function totalActual(investments, years) {
+  return investments.reduce((s, inv) => s + investmentActualValue(inv, years), 0);
+}
+
+// Groups investments by country so totals can be summed within a single currency instead of
+// naively adding, say, dollars to rupees. India sorts first, then the rest alphabetically.
+export function groupInvestmentsByCountry(investments) {
+  const map = new Map();
+  investments.forEach(inv => {
+    const country = inv.country || 'India';
+    if (!map.has(country)) map.set(country, []);
+    map.get(country).push(inv);
+  });
+  const countries = [...map.keys()].sort((a, b) => {
+    if (a === 'India') return -1;
+    if (b === 'India') return 1;
+    return a.localeCompare(b);
+  });
+  return countries.map(country => ({ country, investments: map.get(country) }));
+}
+
 // ---------- trades ----------
 
 // The date by which the broker/tip said this trade should have hit its target percentage.
@@ -291,11 +397,18 @@ export function daysUntil(date, asOf = new Date()) {
   return Math.round((b - a) / 86400000);
 }
 
-// Realized gain for a closed trade, in money and in percent of the amount invested.
+// Money actually kept from an exit after the broker/AMC's exit load (a % fee on the
+// redemption value) is deducted. Absent for trades with no exit load recorded.
+export function netExitAmount(trade) {
+  const exit = Number(trade.exit_amount) || 0;
+  const loadPct = Number(trade.exit_load_percent) || 0;
+  return exit - (exit * loadPct / 100);
+}
+
+// Realized gain for a closed trade, net of exit load, in money and in percent of the amount invested.
 export function tradeGain(trade) {
   const invested = Number(trade.invested_amount) || 0;
-  const exit = Number(trade.exit_amount) || 0;
-  const amount = exit - invested;
+  const amount = netExitAmount(trade) - invested;
   const percent = invested > 0 ? (amount / invested) * 100 : 0;
   return { amount, percent };
 }
@@ -326,6 +439,83 @@ export function sumTradesInvested(trades) {
   return trades.reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
 }
 
+// What you stand to lose if a stop loss is hit: (entry price - stop loss price) x quantity.
+// Needs quantity, entry price, and an enabled stop loss price to mean anything.
+export function stopLossInfo(trade) {
+  if (!trade.stop_loss_enabled || trade.stop_loss_price == null) return null;
+  const qty = Number(trade.quantity);
+  const entry = Number(trade.entry_price);
+  const stopLoss = Number(trade.stop_loss_price);
+  if (!qty || !entry || isNaN(stopLoss)) return null;
+  const amount = (entry - stopLoss) * qty;
+  const invested = Number(trade.invested_amount) || 0;
+  const percent = invested > 0 ? (amount / invested) * 100 : 0;
+  return { amount, percent };
+}
+
+// ---------- savings ----------
+
+// Total saved so far for one savings row: for a recurring ("fixed monthly") plan, the optional
+// one-time top-up plus everything the recurring schedule has contributed to date; for a
+// one-time entry, just its amount. Mirrors investedAmount()'s SIP-vs-lumpsum split.
+export function savingsAmountToDate(s, asOf = new Date()) {
+  if (s.savings_mode === 'recurring') {
+    return (Number(s.amount) || 0) + sipInvestedToDate(s.recurring_history, asOf);
+  }
+  return Number(s.amount) || 0;
+}
+
+export function sumSavings(savingsRows, asOf = new Date()) {
+  return savingsRows.reduce((s, r) => s + savingsAmountToDate(r, asOf), 0);
+}
+
+// How much of `monthStart`'s calendar month should count as "spent" against budget for these
+// savings rows: a one-time entry counts in the month of its saved_date; a recurring plan counts
+// its installment for that month (once it has started), using whatever rate was in effect by
+// month's end. Rows with count_in_budget === false (extra money, not from the regular budget)
+// never count.
+export function savingsMonthlyBudgetImpact(savingsRows, monthStart) {
+  const monthEnd = addMonths(monthStart, 1);
+  const monthStartISO = fmtDateISO(monthStart);
+  const monthEndISO = fmtDateISO(monthEnd);
+  const lastInstant = new Date(monthEnd.getTime() - 1);
+
+  return savingsRows.reduce((sum, s) => {
+    if (s.count_in_budget === false) return sum;
+    if (s.savings_mode === 'recurring') {
+      const history = Array.isArray(s.recurring_history) ? s.recurring_history : [];
+      if (!history.length) return sum;
+      const firstDate = new Date([...history].sort((a, b) => a.date.localeCompare(b.date))[0].date + 'T00:00:00');
+      if (firstDate >= monthEnd) return sum;
+      return sum + sipCurrentRate(history, lastInstant);
+    }
+    return (s.saved_date >= monthStartISO && s.saved_date < monthEndISO) ? sum + (Number(s.amount) || 0) : sum;
+  }, 0);
+}
+
+// Same idea as savingsMonthlyBudgetImpact but for investments: a lump sum counts its amount in
+// its start month, a SIP counts its current installment for any month from its start onward.
+// Rows with count_in_budget === false never count.
+export function investmentMonthlyBudgetImpact(inv, monthStart) {
+  if (inv.count_in_budget === false) return 0;
+  const monthEnd = addMonths(monthStart, 1);
+
+  if (inv.investment_mode === 'sip') {
+    const history = Array.isArray(inv.sip_history) ? inv.sip_history : [];
+    if (!history.length) return 0;
+    const firstDate = new Date([...history].sort((a, b) => a.date.localeCompare(b.date))[0].date + 'T00:00:00');
+    if (firstDate >= monthEnd) return 0;
+    return sipCurrentRate(history, new Date(monthEnd.getTime() - 1));
+  }
+
+  const start = new Date(inv.start_date + 'T00:00:00');
+  return (start >= monthStart && start < monthEnd) ? (Number(inv.amount) || 0) : 0;
+}
+
+export function investmentsMonthlyBudgetImpact(investments, monthStart) {
+  return investments.reduce((s, inv) => s + investmentMonthlyBudgetImpact(inv, monthStart), 0);
+}
+
 // Realized P&L across every closed trade, plus a win rate (share that hit their target %).
 // ---------- goals ----------
 
@@ -354,9 +544,14 @@ export function tradesSummary(trades) {
   const wins = closed.filter(t => tradeStatusInfo(t).hitTarget).length;
   const winRate = closed.length > 0 ? (wins / closed.length) * 100 : 0;
   const open = trades.filter(t => t.status === 'open');
+  const openRisk = open.reduce((s, t) => {
+    const info = stopLossInfo(t);
+    return s + (info && info.amount > 0 ? info.amount : 0);
+  }, 0);
   return {
     realizedGain, realizedPercent,
     closedCount: closed.length, winRate,
     openCount: open.length, openInvested: sumTradesInvested(open),
+    openRisk,
   };
 }
