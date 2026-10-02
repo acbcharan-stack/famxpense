@@ -6,6 +6,9 @@ import {
 
 let profiles = [];
 let savings = [];
+let withdrawals = [];
+let withdrawalsReady = true;
+let selectedWdProfileId = null;
 let savingsTableReady = true;
 let editingSavingsId = null;
 let selectedSavingsProfileId = null;
@@ -27,6 +30,13 @@ async function loadSavings() {
 }
 
 // ---------- savings ----------
+
+async function loadWithdrawals() {
+  const { data, error } = await sb.from('savings_withdrawals').select('*').order('withdrawn_date', { ascending: false });
+  if (error) { withdrawalsReady = false; withdrawals = []; return; }
+  withdrawalsReady = true;
+  withdrawals = data || [];
+}
 
 function renderSavingsProfilePicker() {
   const picker = document.getElementById('savingsProfilePicker');
@@ -116,6 +126,11 @@ function renderSavingsCard(s) {
 }
 
 function renderSavings() {
+  renderWithdrawals();
+  renderSavingsInner();
+}
+
+function renderSavingsInner() {
   const totalRow = document.getElementById('savingsTotalRow');
   const list = document.getElementById('savingsList');
 
@@ -129,16 +144,19 @@ function renderSavings() {
     return;
   }
 
-  const sumFor = rows => rows.reduce((a, r) => a + savingsAmountToDate(r), 0);
-  const total = sumFor(savings);
+  // Net of anything already spent out of savings.
+  const withdrawnFor = id => withdrawals.filter(w => w.profile_id === id).reduce((a, w) => a + Number(w.amount), 0);
+  const sumFor = (rows, id) => rows.reduce((a, r) => a + savingsAmountToDate(r), 0) - (id ? withdrawnFor(id) : 0);
+  const totalWithdrawn = withdrawals.reduce((a, w) => a + Number(w.amount), 0);
+  const total = sumFor(savings) - totalWithdrawn;
   const perProfile = profiles
-    .map(p => ({ p, amt: sumFor(savings.filter(s => s.profile_id === p.id)) }))
-    .filter(x => x.amt > 0);
+    .map(p => ({ p, amt: sumFor(savings.filter(s => s.profile_id === p.id), p.id) }))
+    .filter(x => x.amt !== 0);
   const unassigned = sumFor(savings.filter(s => !s.profile_id));
 
   totalRow.innerHTML = `
     <div class="stat-tile">
-      <div class="label">Total savings</div>
+      <div class="label">Total savings${totalWithdrawn > 0 ? ' (after spending)' : ''}</div>
       <div class="value">${fmtMoney(total)}</div>
     </div>
     ${perProfile.map(({ p, amt }) => `
@@ -159,6 +177,91 @@ function renderSavings() {
     return;
   }
   savings.forEach(s => list.appendChild(renderSavingsCard(s)));
+}
+
+function renderWithdrawals() {
+  const list = document.getElementById('withdrawalsList');
+  list.innerHTML = '';
+  if (!withdrawalsReady) {
+    list.innerHTML = `<div class="empty-note">The savings_withdrawals table isn't set up yet. Run the <code>savings_withdrawals</code> block at the end of <code>schema.sql</code> in Supabase, then reload.</div>`;
+    return;
+  }
+  if (withdrawals.length === 0) {
+    list.innerHTML = '<div class="empty-note">Nothing spent from savings yet. Tap “− Spend from savings”.</div>';
+    return;
+  }
+  withdrawals.forEach(w => {
+    const owner = profiles.find(p => p.id === w.profile_id);
+    const dateStr = new Date(w.withdrawn_date + 'T00:00:00').toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    const card = document.createElement('div');
+    card.className = 'investment-card';
+    card.innerHTML = `
+      <div class="investment-head">
+        <div class="investment-type">
+          ${escapeHtml(w.note || 'Spent from savings')}
+          <span class="investment-subtype">${owner ? owner.emoji + ' ' + escapeHtml(owner.name) : 'Unassigned'}</span>
+        </div>
+        <button class="txn-del" title="Delete">🗑️</button>
+      </div>
+      <div class="investment-numbers"><span>Spent: <strong>${fmtMoney(w.amount)}</strong></span></div>
+      <div class="investment-meta">${dateStr}</div>`;
+    card.querySelector('.txn-del').addEventListener('click', () => deleteWithdrawal(w.id));
+    list.appendChild(card);
+  });
+}
+
+function renderWdProfilePicker() {
+  const picker = document.getElementById('wdProfilePicker');
+  picker.innerHTML = '';
+  profiles.forEach(p => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'profile-pick-btn' + (selectedWdProfileId === p.id ? ' selected' : '');
+    btn.style.setProperty('--accent', p.color);
+    btn.innerHTML = `<span class="emo">${p.emoji}</span><span>${escapeHtml(p.name)}</span>`;
+    btn.addEventListener('click', () => { selectedWdProfileId = p.id; renderWdProfilePicker(); });
+    picker.appendChild(btn);
+  });
+}
+
+function openWdModal() {
+  selectedWdProfileId = profiles[0]?.id || null;
+  renderWdProfilePicker();
+  document.getElementById('wdAmount').value = '';
+  document.getElementById('wdDate').value = fmtDateISO(new Date());
+  document.getElementById('wdNote').value = '';
+  document.getElementById('wdModalOverlay').classList.add('open');
+}
+
+function closeWdModal() {
+  document.getElementById('wdModalOverlay').classList.remove('open');
+}
+
+async function saveWithdrawal() {
+  const amount = parseFloat(document.getElementById('wdAmount').value);
+  const date = document.getElementById('wdDate').value;
+  const note = document.getElementById('wdNote').value.trim();
+  if (!withdrawalsReady) { toast('Run the savings_withdrawals SQL first'); return; }
+  if (!selectedWdProfileId) { toast('Pick a profile'); return; }
+  if (isNaN(amount) || amount <= 0) { toast('Enter a valid amount'); return; }
+  if (!date) { toast('Pick a date'); return; }
+  const { error } = await sb.from('savings_withdrawals').insert({
+    profile_id: selectedWdProfileId, amount, withdrawn_date: date, note: note || null,
+  });
+  if (error) { toast('Save failed: ' + error.message); return; }
+  closeWdModal();
+  toast('Spent from savings recorded');
+  await loadWithdrawals();
+  renderSavings();
+}
+
+async function deleteWithdrawal(id) {
+  if (!confirm('Delete this entry?')) return;
+  const { error } = await sb.from('savings_withdrawals').delete().eq('id', id);
+  if (error) { toast('Delete failed: ' + error.message); return; }
+  await loadWithdrawals();
+  renderSavings();
+  toast('Entry deleted');
 }
 
 function openSavingsModal(s) {
@@ -280,7 +383,13 @@ async function init() {
 
   document.getElementById('themeToggle').addEventListener('click', toggleTheme);
   document.getElementById('fabAdd')?.addEventListener('click', () => openSavingsModal(null));
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeSavingsModal(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeSavingsModal(); closeWdModal(); } });
+  document.getElementById('spendSavingsBtn').addEventListener('click', openWdModal);
+  document.getElementById('wdModalCancel').addEventListener('click', closeWdModal);
+  document.getElementById('wdModalSave').addEventListener('click', saveWithdrawal);
+  document.getElementById('wdModalOverlay').addEventListener('click', (e) => {
+    if (e.target.id === 'wdModalOverlay') closeWdModal();
+  });
   document.getElementById('addSavingsBtn').addEventListener('click', () => openSavingsModal(null));
   document.getElementById('savingsModalCancel').addEventListener('click', closeSavingsModal);
   document.getElementById('savingsModalSave').addEventListener('click', saveSavings);
@@ -293,7 +402,7 @@ async function init() {
   document.getElementById('addSavingsChangeBtn').addEventListener('click', () => addSavingsChangeRow());
 
   try {
-    await Promise.all([loadProfiles(), loadSavings()]);
+    await Promise.all([loadProfiles(), loadSavings(), loadWithdrawals()]);
   } catch {
     document.querySelector('.app').innerHTML = `
       <div class="empty-note" style="padding:60px 20px; text-align:center;">

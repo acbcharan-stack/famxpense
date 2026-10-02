@@ -212,3 +212,18 @@ create table if not exists bank_balances (
 alter table bank_balances enable row level security;
 drop policy if exists "family only bank_balances" on bank_balances;
 create policy "family only bank_balances" on bank_balances for all using (is_family_member()) with check (is_family_member());
+
+-- Money spent out of savings (possibly months after it was saved). Lowers the savings total and
+-- the bank balance for the month of withdrawn_date, but never counts against the budget.
+create table if not exists savings_withdrawals (
+  id uuid primary key default gen_random_uuid(),
+  profile_id uuid not null references profiles(id) on delete cascade,
+  amount numeric(12,2) not null check (amount > 0),
+  withdrawn_date date not null default current_date,
+  note text,
+  created_at timestamptz not null default now()
+);
+
+alter table savings_withdrawals enable row level security;
+drop policy if exists "family only savings_withdrawals" on savings_withdrawals;
+create policy "family only savings_withdrawals" on savings_withdrawals for all using (is_family_member()) with check (is_family_member());

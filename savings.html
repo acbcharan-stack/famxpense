@@ -26,10 +26,16 @@
 
   <div class="section-title-row">
     <div class="section-title">🐷 Savings <span class="investment-subtype">no interest — just parked money</span></div>
-    <button class="link-btn" id="addSavingsBtn">+ Add savings</button>
+    <div class="txn-tools">
+      <button class="link-btn" id="addSavingsBtn">+ Add savings</button>
+      <button class="link-btn" id="spendSavingsBtn">− Spend from savings</button>
+    </div>
   </div>
   <div class="stat-row" id="savingsTotalRow"></div>
   <div class="invest-list" id="savingsList"><div class="empty-note">Loading…</div></div>
+
+  <div class="section-title">💸 Spent from savings <span class="investment-subtype">reduces savings and the bank balance, not the budget</span></div>
+  <div class="invest-list" id="withdrawalsList"><div class="empty-note">Loading…</div></div>
 
 </div>
   </div>
@@ -92,6 +98,33 @@
     <div class="modal-actions">
       <button class="btn btn-ghost" id="savingsModalCancel">Cancel</button>
       <button class="btn btn-primary" id="savingsModalSave">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="wdModalOverlay">
+  <div class="modal">
+    <h2>Spend from savings</h2>
+    <div class="field">
+      <label>Profile</label>
+      <div class="profile-picker" id="wdProfilePicker"></div>
+    </div>
+    <div class="field">
+      <label for="wdAmount">Amount spent</label>
+      <input type="number" id="wdAmount" min="0.01" step="0.01" placeholder="0.00" />
+    </div>
+    <div class="field">
+      <label for="wdDate">Date</label>
+      <input type="date" id="wdDate" />
+    </div>
+    <div class="field">
+      <label for="wdNote">What was it for? (optional)</label>
+      <input type="text" id="wdNote" placeholder="e.g. laptop, school fees" />
+    </div>
+    <div class="field-hint">This lowers your savings and that month's bank balance. It is not counted against the monthly budget.</div>
+    <div class="modal-actions">
+      <button class="btn btn-ghost" id="wdModalCancel">Cancel</button>
+      <button class="btn btn-primary" id="wdModalSave">Save</button>
     </div>
   </div>
 </div>

@@ -21,6 +21,7 @@ let savings = [];
 let savingsTableReady = true;
 let bankBalances = [];
 let bankTableReady = true;
+let withdrawals = [];
 let activeProfileFilter = 'all';
 let selectedModalProfile = null;
 let chartTableView = false;
@@ -107,8 +108,15 @@ async function loadBankBalance() {
   bankBalances = data || [];
 }
 
+// Non-fatal: spending out of savings only matters for the bank balance memo.
+async function loadWithdrawals() {
+  const { data, error } = await sb.from('savings_withdrawals').select('*')
+    .gte('withdrawn_date', fmtDateISO(currentMonth)).lt('withdrawn_date', fmtDateISO(addMonths(currentMonth, 1)));
+  withdrawals = error ? [] : (data || []);
+}
+
 async function loadAllData() {
-  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings(), loadBankBalance()]);
+  await Promise.all([loadMonthData(), loadTrendData(), loadInvestments(), loadTrades(), loadSavings(), loadBankBalance(), loadWithdrawals()]);
 }
 
 function computeProfileStats(profileId) {
@@ -174,7 +182,9 @@ function bankOutflow(profileId) {
   const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
   const investOut = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
   const savingsOut = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
-  return { expensesOut, investOut, savingsOut, total: expensesOut + investOut + savingsOut };
+  // Savings spent this month (saved earlier): leaves the bank but isn't a budget item.
+  const withdrawnOut = withdrawals.filter(w => w.profile_id === profileId).reduce((s, w) => s + Number(w.amount), 0);
+  return { expensesOut, investOut, savingsOut, withdrawnOut, total: expensesOut + investOut + savingsOut + withdrawnOut };
 }
 
 // Fills the "expected end balance" field and the short/high memo from the card's current inputs.
@@ -192,7 +202,7 @@ function updateBankCard(card, profileId) {
 
   hint.textContent = !bankTableReady
     ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
-    : `Deducted: ${fmtMoney(out.expensesOut)} expenses + ${fmtMoney(out.investOut)} investments + ${fmtMoney(out.savingsOut)} savings`;
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses + ${fmtMoney(out.investOut)} investments + ${fmtMoney(out.savingsOut)} savings${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}`;
   memo.className = 'bank-memo';
   memo.textContent = '';
 
