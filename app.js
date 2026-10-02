@@ -5,6 +5,7 @@ import {
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
   tradesSummary, goalProgress,
+  savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
   CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
 
@@ -167,12 +168,54 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
-function bankHintText(row) {
-  if (!bankTableReady) return 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.';
-  const o = row?.opening_balance, c = row?.closing_balance;
-  if (o == null || c == null) return '';
-  const diff = Number(c) - Number(o);
-  return diff === 0 ? 'No change over the month.' : `${diff > 0 ? 'Up' : 'Down'} ${fmtMoney(Math.abs(diff))} over the month.`;
+// What left the bank account this month for a profile: expenses, plus investments and savings
+// whose "count against the monthly budget" box is ticked.
+function bankOutflow(profileId) {
+  const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
+  const investOut = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
+  const savingsOut = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
+  return { expensesOut, investOut, savingsOut, total: expensesOut + investOut + savingsOut };
+}
+
+// Fills the "expected end balance" field and the short/high memo from the card's current inputs.
+function updateBankCard(card, profileId) {
+  const num = sel => {
+    const raw = card.querySelector(sel).value;
+    return raw === '' ? null : parseFloat(raw);
+  };
+  const opening = num('.bank-opening');
+  const closing = num('.bank-closing');
+  const expectedEl = card.querySelector('.bank-expected');
+  const hint = card.querySelector('.bank-hint');
+  const memo = card.querySelector('.bank-memo');
+  const out = bankOutflow(profileId);
+
+  hint.textContent = !bankTableReady
+    ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses + ${fmtMoney(out.investOut)} investments + ${fmtMoney(out.savingsOut)} savings`;
+  memo.className = 'bank-memo';
+  memo.textContent = '';
+
+  if (opening == null || isNaN(opening)) {
+    expectedEl.value = '';
+    expectedEl.placeholder = 'Enter start amount';
+    return;
+  }
+  const expected = opening - out.total;
+  expectedEl.value = expected.toFixed(2);
+
+  if (closing == null || isNaN(closing)) return;
+  const diff = closing - expected;
+  if (Math.abs(diff) < 0.5) {
+    memo.textContent = '✅ Matches — every rupee is accounted for.';
+    memo.classList.add('good');
+  } else if (diff < 0) {
+    memo.textContent = `⚠️ Short by ${fmtMoney(Math.abs(diff))} — probably an expense that wasn't recorded.`;
+    memo.classList.add('critical');
+  } else {
+    memo.textContent = `⚠️ High by ${fmtMoney(diff)} — maybe income received, or an expense recorded that wasn't paid from this account.`;
+    memo.classList.add('warning');
+  }
 }
 
 // Per-profile start/end-of-month bank balance — a reference record only, never part of budgets.
@@ -188,11 +231,16 @@ function bankSectionHtml(profileId) {
           <input type="number" step="0.01" class="bank-opening" placeholder="Amount" value="${row?.opening_balance ?? ''}" ${dis} />
         </div>
         <div class="bank-field">
-          <label>End of month</label>
-          <input type="number" step="0.01" class="bank-closing" placeholder="Amount" value="${row?.closing_balance ?? ''}" ${dis} />
+          <label>Expected end (after spending)</label>
+          <input type="number" class="bank-expected" readonly tabindex="-1" />
+        </div>
+        <div class="bank-field">
+          <label>Actual end of month</label>
+          <input type="number" step="0.01" class="bank-closing" placeholder="Amount in bank" value="${row?.closing_balance ?? ''}" ${dis} />
         </div>
         <button class="btn btn-primary btn-sm bank-save" ${dis}>Save</button>
-        <div class="field-hint bank-hint">${bankHintText(row)}</div>
+        <div class="bank-memo"></div>
+        <div class="field-hint bank-hint"></div>
       </div>
     </div>`;
 }
@@ -258,6 +306,9 @@ function renderProfiles() {
     const bankSection = card.querySelector('.bank-section');
     bankSection.addEventListener('click', (e) => e.stopPropagation());
     card.querySelector('.bank-save').addEventListener('click', () => saveBankBalance(p, card));
+    card.querySelectorAll('.bank-opening, .bank-closing').forEach(el =>
+      el.addEventListener('input', () => updateBankCard(card, p.id)));
+    updateBankCard(card, p.id);
 
     // rename
     card.querySelector('[data-action="rename"]').addEventListener('click', (e) => {

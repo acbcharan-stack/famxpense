@@ -1347,3 +1347,10 @@ html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
   font-variant-numeric: tabular-nums;
 }
 .bank-card .field-hint { flex-basis: 100%; margin: 0; }
+
+.bank-field input[readonly] { background: transparent; color: var(--text-secondary); border-style: dashed; }
+.bank-memo { flex-basis: 100%; font-size: 0.8rem; font-weight: 600; }
+.bank-memo:empty { display: none; }
+.bank-memo.good { color: var(--status-good); }
+.bank-memo.warning { color: var(--status-warning, #eda100); }
+.bank-memo.critical { color: var(--status-critical); }
