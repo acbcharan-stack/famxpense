@@ -178,50 +178,19 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
-// Money that actually left the bank this month into savings/investments: a one-time amount on its
-// own date, and a SIP / recurring installment on its day of the month once that day has arrived.
-// (Ignores "count in budget" - that's a budgeting choice, not a bank movement.)
-function scheduledOut(profileId) {
-  const start = currentMonth;
-  const end = addMonths(currentMonth, 1);
-  const startISO = fmtDateISO(start);
-  const endISO = fmtDateISO(end);
-  const now = new Date();
-  const inMonth = d => d && d >= startISO && d < endISO;
-  const installment = history => {
-    if (!Array.isArray(history) || !history.length) return 0;
-    const firstISO = [...history].map(h => h.date).sort()[0];
-    const day = Number(firstISO.slice(8, 10));
-    const lastDay = new Date(start.getFullYear(), start.getMonth() + 1, 0).getDate();
-    const due = new Date(start.getFullYear(), start.getMonth(), Math.min(day, lastDay));
-    if (due < new Date(firstISO + 'T00:00:00') || due > now) return 0;
-    return sipCurrentRate(history, due);
-  };
-  let investOut = 0, savingsOut = 0;
-  investments.filter(i => i.profile_id === profileId).forEach(i => {
-    if (i.investment_mode === 'sip') investOut += installment(i.sip_history);
-    if (inMonth(i.start_date) && (i.investment_mode !== 'sip' || Number(i.amount) > 0)) investOut += Number(i.amount) || 0;
-  });
-  savings.filter(x => x.profile_id === profileId).forEach(x => {
-    if (x.savings_mode === 'recurring') savingsOut += installment(x.recurring_history);
-    if (inMonth(x.saved_date)) savingsOut += Number(x.amount) || 0;
-  });
-  return { investOut, savingsOut };
-}
-
-// Money out of / into the bank this month for a profile: expenses (incl. spent from savings) and
-// trades bought go out; trades sold come back in.
+// Money out of / into the bank this month for a profile: expenses, savings spent (the "spend from
+// savings" button) and trades bought go out; trades sold come back in. Saving/investing money
+// is deliberately not deducted.
 function bankOutflow(profileId) {
   const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
   const withdrawnOut = withdrawals.filter(w => w.profile_id === profileId).reduce((s, w) => s + Number(w.amount), 0);
-  const { investOut, savingsOut } = scheduledOut(profileId);
   const startISO = fmtDateISO(currentMonth);
   const endISO = fmtDateISO(addMonths(currentMonth, 1));
   const inMonth = d => d && d >= startISO && d < endISO;
   const mine = trades.filter(t => t.profile_id === profileId);
   const tradesOut = mine.filter(t => inMonth(t.trade_date)).reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
   const tradesIn = mine.filter(t => t.status === 'closed' && inMonth(t.exit_date)).reduce((s, t) => s + netExitAmount(t), 0);
-  return { expensesOut, withdrawnOut, investOut, savingsOut, tradesOut, tradesIn, total: expensesOut + withdrawnOut + investOut + savingsOut + tradesOut - tradesIn };
+  return { expensesOut, withdrawnOut, tradesOut, tradesIn, total: expensesOut + withdrawnOut + tradesOut - tradesIn };
 }
 
 // Fills the "expected end balance" field and the short/high memo from the card's current inputs.
@@ -239,7 +208,7 @@ function updateBankCard(card, profileId) {
 
   hint.textContent = !bankTableReady
     ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
-    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}${out.investOut > 0 ? ` + ${fmtMoney(out.investOut)} investments` : ''}${out.savingsOut > 0 ? ` + ${fmtMoney(out.savingsOut)} savings` : ''}${out.tradesOut > 0 ? ` + ${fmtMoney(out.tradesOut)} trades bought` : ''}${out.tradesIn > 0 ? ` − ${fmtMoney(out.tradesIn)} trades sold` : ''}`;
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}${out.tradesOut > 0 ? ` + ${fmtMoney(out.tradesOut)} trades bought` : ''}${out.tradesIn > 0 ? ` − ${fmtMoney(out.tradesIn)} trades sold` : ''}`;
   memo.className = 'bank-memo';
   memo.textContent = '';
 
