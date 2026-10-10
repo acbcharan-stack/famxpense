@@ -112,6 +112,23 @@ export async function scanReceipts(dataUrls) {
   return Array.isArray(data?.transactions) ? data.transactions : [];
 }
 
+// Chat about the scanned bills (scan-chat edge function). Resolves to { reply, updates }.
+export async function chatAboutScan(payload) {
+  const invoke = sb.functions.invoke('scan-chat', { body: payload });
+  const timeout = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error('Timed out — try again')), SCAN_TIMEOUT_MS));
+  const { data, error } = await Promise.race([invoke, timeout]);
+  if (error) {
+    let msg = error.message || 'Chat failed';
+    try {
+      const ctx = await error.context?.json?.();
+      if (ctx?.error) msg = ctx.error;
+    } catch { /* keep the generic message */ }
+    throw new Error(msg);
+  }
+  return { reply: String(data?.reply || ''), updates: Array.isArray(data?.updates) ? data.updates : [] };
+}
+
 // ---------- date / money helpers ----------
 
 export function pad(n) { return String(n).padStart(2, '0'); }

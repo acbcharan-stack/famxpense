@@ -1354,3 +1354,12 @@ html[data-theme="dark"] .trade-badge.overdue { color: #ffd27a; }
 .bank-memo.good { color: var(--status-good); }
 .bank-memo.warning { color: var(--status-warning, #eda100); }
 .bank-memo.critical { color: var(--status-critical); }
+
+.scan-chat { border-top: 1px dashed var(--border); margin-top: 8px; padding-top: 12px; }
+.scan-chat-title { font-size: 0.85rem; font-weight: 600; margin-bottom: 8px; }
+.scan-chat-log { display: flex; flex-direction: column; gap: 6px; max-height: 180px; overflow-y: auto; margin-bottom: 8px; }
+.scan-chat-msg { padding: 8px 12px; border-radius: 12px; font-size: 0.85rem; max-width: 85%; white-space: pre-wrap; }
+.scan-chat-msg.user { align-self: flex-end; background: var(--series-1); color: #fff; }
+.scan-chat-msg.bot { align-self: flex-start; background: var(--surface-2); border: 1px solid var(--border); }
+.scan-chat-form { display: flex; gap: 8px; }
+.scan-chat-form input { flex: 1; min-width: 0; }

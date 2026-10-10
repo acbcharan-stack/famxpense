@@ -146,6 +146,14 @@
       <div class="profile-picker" id="scanApplyAllPicker"></div>
     </div>
     <div id="scanResults"></div>
+    <div class="scan-chat" id="scanChat" hidden>
+      <div class="scan-chat-title">💬 Ask about these bills or tell me what to change</div>
+      <div class="scan-chat-log" id="scanChatLog"></div>
+      <form class="scan-chat-form" id="scanChatForm">
+        <input type="text" id="scanChatInput" placeholder='e.g. "make the category Groceries" or "what was the GST?"' autocomplete="off" />
+        <button type="submit" class="btn btn-primary btn-sm" id="scanChatSend">Send</button>
+      </form>
+    </div>
     <div class="modal-actions">
       <button class="btn btn-ghost" id="scanCancel">Cancel</button>
       <button class="btn btn-primary" id="scanSave" disabled>Save</button>

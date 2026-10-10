@@ -4,7 +4,7 @@ import {
   pad, fmtDateISO, startOfMonth, addMonths,
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
-  tradesSummary, goalProgress, netExitAmount, sipCurrentRate,
+  tradesSummary, goalProgress, netExitAmount, sipCurrentRate, chatAboutScan,
   savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
   CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
@@ -27,6 +27,8 @@ let selectedModalProfile = null;
 let chartTableView = false;
 let goalModalProfile = null;
 let scanDraft = [];
+let scanImages = [];
+let scanChatMessages = [];
 
 const TREND_MONTHS = 6;
 let trendExpenses = [];
@@ -1284,6 +1286,77 @@ function renderScanResults(transactions) {
   renderScanApplyAllPicker(defaultProfile);
   renderScanCardsList();
   updateScanSaveLabel();
+  resetScanChat(true);
+}
+
+// ---------- chat about the scan ----------
+
+function addScanChatBubble(role, text) {
+  const log = document.getElementById('scanChatLog');
+  const div = document.createElement('div');
+  div.className = 'scan-chat-msg ' + (role === 'user' ? 'user' : 'bot');
+  div.textContent = text;
+  log.appendChild(div);
+  log.scrollTop = log.scrollHeight;
+}
+
+function resetScanChat(show) {
+  scanChatMessages = [];
+  document.getElementById('scanChatLog').innerHTML = '';
+  document.getElementById('scanChat').hidden = !show;
+}
+
+// Applies edits the assistant returned to the on-screen draft (nothing is saved until "Save").
+function applyScanUpdates(updates) {
+  let changed = 0;
+  updates.forEach(u => {
+    const entry = scanDraft.find(e => e.id === u.id);
+    if (!entry) return;
+    if (typeof u.merchant === 'string') entry.merchant = u.merchant;
+    if (u.amount != null && !isNaN(Number(u.amount)) && Number(u.amount) >= 0) { entry.amount = String(Number(u.amount)); entry.splitMode = false; }
+    if (/^d{4}-d{2}-d{2}$/.test(u.date || '')) entry.date = u.date;
+    if (CATEGORIES.includes(u.category)) entry.category = u.category;
+    if (u.direction === 'credit' || u.direction === 'debit') entry.direction = u.direction;
+    if (typeof u.note === 'string') entry.note = u.note;
+    if (u.profile) {
+      const p = profiles.find(x => x.name.toLowerCase() === String(u.profile).toLowerCase());
+      if (p) entry.profileId = p.id;
+    }
+    if (u.included === false) entry.included = false;
+    changed++;
+  });
+  if (changed) { renderScanCardsList(); updateScanSaveLabel(); }
+}
+
+async function sendScanChat(text) {
+  addScanChatBubble('user', text);
+  scanChatMessages.push({ role: 'user', text });
+  const input = document.getElementById('scanChatInput');
+  const send = document.getElementById('scanChatSend');
+  input.value = ''; input.disabled = true; send.disabled = true;
+  try {
+    const { reply, updates } = await chatAboutScan({
+      messages: scanChatMessages,
+      images: scanImages,
+      categories: CATEGORIES,
+      profiles: profiles.map(p => p.name),
+      drafts: scanDraft.map(e => ({
+        id: e.id, merchant: e.merchant, amount: Number(e.amount) || 0, date: e.date,
+        category: e.category, direction: e.direction, note: e.note, included: e.included,
+        profile: profiles.find(p => p.id === e.profileId)?.name || '',
+        line_items: e.lineItems.map(i => ({ description: i.description, amount: i.amount })),
+      })),
+    });
+    applyScanUpdates(updates);
+    const botText = reply || (updates.length ? 'Done.' : 'Okay.');
+    scanChatMessages.push({ role: 'assistant', text: botText });
+    addScanChatBubble('bot', botText);
+  } catch (err) {
+    scanChatMessages.pop();
+    addScanChatBubble('bot', 'Sorry, that failed: ' + (err?.message || err));
+  } finally {
+    input.disabled = false; send.disabled = false; input.focus();
+  }
 }
 
 async function handleScanFiles(fileList) {
@@ -1294,6 +1367,8 @@ async function handleScanFiles(fileList) {
   const status = document.getElementById('scanStatus');
   document.getElementById('scanResults').innerHTML = '';
   scanDraft = [];
+  scanImages = [];
+  resetScanChat(false);
   document.getElementById('scanSave').textContent = 'Save';
   document.getElementById('scanSave').disabled = true;
   status.innerHTML = `<span class="spinner"></span> Reading ${files.length} image${files.length === 1 ? '' : 's'}… this usually takes 5–15 seconds.`;
@@ -1301,6 +1376,7 @@ async function handleScanFiles(fileList) {
 
   try {
     const dataUrls = await Promise.all(files.map(f => fileToScaledJpeg(f)));
+    scanImages = dataUrls;
     const transactions = await scanReceipts(dataUrls);
     renderScanResults(transactions);
   } catch (err) {
@@ -1464,6 +1540,11 @@ async function init() {
   });
   document.getElementById('scanCancel').addEventListener('click', () => document.getElementById('scanOverlay').classList.remove('open'));
   document.getElementById('scanSave').addEventListener('click', saveScanned);
+  document.getElementById('scanChatForm').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const text = document.getElementById('scanChatInput').value.trim();
+    if (text) sendScanChat(text);
+  });
   document.getElementById('scanOverlay').addEventListener('click', (e) => {
     if (e.target.id === 'scanOverlay') document.getElementById('scanOverlay').classList.remove('open');
   });
