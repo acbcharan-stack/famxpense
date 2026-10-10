@@ -176,15 +176,15 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
-// What left the bank account this month for a profile: expenses, plus investments and savings
-// whose "count against the monthly budget" box is ticked.
+// What was actually spent this month for a profile: expenses plus savings withdrawn and spent.
+// Budget allocations (investments/savings counted against the budget) are not spending.
 function bankOutflow(profileId) {
   const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
   const investOut = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
   const savingsOut = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
   // Savings spent this month (saved earlier): leaves the bank but isn't a budget item.
   const withdrawnOut = withdrawals.filter(w => w.profile_id === profileId).reduce((s, w) => s + Number(w.amount), 0);
-  return { expensesOut, investOut, savingsOut, withdrawnOut, total: expensesOut + investOut + savingsOut + withdrawnOut };
+  return { expensesOut, investOut, savingsOut, withdrawnOut, total: expensesOut + withdrawnOut };
 }
 
 // Fills the "expected end balance" field and the short/high memo from the card's current inputs.
@@ -202,7 +202,7 @@ function updateBankCard(card, profileId) {
 
   hint.textContent = !bankTableReady
     ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
-    : `Deducted: ${fmtMoney(out.expensesOut)} expenses + ${fmtMoney(out.investOut)} investments + ${fmtMoney(out.savingsOut)} savings${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}`;
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}`;
   memo.className = 'bank-memo';
   memo.textContent = '';
 
