@@ -4,7 +4,7 @@ import {
   pad, fmtDateISO, startOfMonth, addMonths,
   applyStoredTheme, toggleTheme, initSidebar,
   INVESTMENT_CATEGORY, sumInvested, totalProjected, PROJECTION_MILESTONES,
-  tradesSummary, goalProgress,
+  tradesSummary, goalProgress, netExitAmount,
   savingsMonthlyBudgetImpact, investmentsMonthlyBudgetImpact,
   CATEGORIES, fileToScaledJpeg, scanReceipts,
 } from './common.js';
@@ -176,15 +176,18 @@ function renderStats() {
   statusText.className = 'status-text ' + status;
 }
 
-// What was actually spent this month for a profile: expenses plus savings withdrawn and spent.
-// Budget allocations (investments/savings counted against the budget) are not spending.
+// Money out of / into the bank this month for a profile: expenses (incl. spent from savings) and
+// trades bought go out; trades sold come back in.
 function bankOutflow(profileId) {
   const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
-  const investOut = investmentsMonthlyBudgetImpact(investments.filter(i => i.profile_id === profileId), currentMonth);
-  const savingsOut = savingsMonthlyBudgetImpact(savings.filter(s => s.profile_id === profileId), currentMonth);
-  // Savings spent this month (saved earlier): leaves the bank but isn't a budget item.
   const withdrawnOut = withdrawals.filter(w => w.profile_id === profileId).reduce((s, w) => s + Number(w.amount), 0);
-  return { expensesOut, investOut, savingsOut, withdrawnOut, total: expensesOut + withdrawnOut };
+  const startISO = fmtDateISO(currentMonth);
+  const endISO = fmtDateISO(addMonths(currentMonth, 1));
+  const inMonth = d => d && d >= startISO && d < endISO;
+  const mine = trades.filter(t => t.profile_id === profileId);
+  const tradesOut = mine.filter(t => inMonth(t.trade_date)).reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
+  const tradesIn = mine.filter(t => t.status === 'closed' && inMonth(t.exit_date)).reduce((s, t) => s + netExitAmount(t), 0);
+  return { expensesOut, withdrawnOut, tradesOut, tradesIn, total: expensesOut + withdrawnOut + tradesOut - tradesIn };
 }
 
 // Fills the "expected end balance" field and the short/high memo from the card's current inputs.
@@ -202,7 +205,7 @@ function updateBankCard(card, profileId) {
 
   hint.textContent = !bankTableReady
     ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
-    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}`;
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}${out.tradesOut > 0 ? ` + ${fmtMoney(out.tradesOut)} trades bought` : ''}${out.tradesIn > 0 ? ` − ${fmtMoney(out.tradesIn)} trades sold` : ''}`;
   memo.className = 'bank-memo';
   memo.textContent = '';
 
