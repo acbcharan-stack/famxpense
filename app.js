@@ -179,7 +179,7 @@ function renderStats() {
 }
 
 // Money out of / into the bank this month for a profile: expenses, savings spent (the "spend from
-// savings" button) and trades bought go out; trades sold come back in. Saving/investing money
+// savings" button) and trades bought go out; trades sold are added to the bank balance, not netted against expenses. Saving/investing money
 // is deliberately not deducted.
 function bankOutflow(profileId) {
   const expensesOut = expenses.filter(e => e.profile_id === profileId).reduce((s, e) => s + Number(e.amount), 0);
@@ -190,7 +190,7 @@ function bankOutflow(profileId) {
   const mine = trades.filter(t => t.profile_id === profileId);
   const tradesOut = mine.filter(t => inMonth(t.trade_date)).reduce((s, t) => s + (Number(t.invested_amount) || 0), 0);
   const tradesIn = mine.filter(t => t.status === 'closed' && inMonth(t.exit_date)).reduce((s, t) => s + netExitAmount(t), 0);
-  return { expensesOut, withdrawnOut, tradesOut, tradesIn, total: expensesOut + withdrawnOut + tradesOut - tradesIn };
+  return { expensesOut, withdrawnOut, tradesOut, tradesIn, total: expensesOut + withdrawnOut + tradesOut };
 }
 
 // Fills the "expected end balance" field and the short/high memo from the card's current inputs.
@@ -208,7 +208,7 @@ function updateBankCard(card, profileId) {
 
   hint.textContent = !bankTableReady
     ? 'Run the bank_balances block at the end of schema.sql in Supabase, then reload.'
-    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}${out.tradesOut > 0 ? ` + ${fmtMoney(out.tradesOut)} trades bought` : ''}${out.tradesIn > 0 ? ` − ${fmtMoney(out.tradesIn)} trades sold` : ''}`;
+    : `Deducted: ${fmtMoney(out.expensesOut)} expenses${out.withdrawnOut > 0 ? ` + ${fmtMoney(out.withdrawnOut)} spent from savings` : ''}${out.tradesOut > 0 ? ` + ${fmtMoney(out.tradesOut)} trades bought` : ''}${out.tradesIn > 0 ? ` · Added to balance: ${fmtMoney(out.tradesIn)} trades sold` : ''}`;
   memo.className = 'bank-memo';
   memo.textContent = '';
 
@@ -217,7 +217,7 @@ function updateBankCard(card, profileId) {
     expectedEl.placeholder = 'Enter start amount';
     return;
   }
-  const expected = opening - out.total;
+  const expected = opening + out.tradesIn - out.total;
   expectedEl.value = expected.toFixed(2);
 
   if (closing == null || isNaN(closing)) return;
